@@ -1,9 +1,9 @@
 import { DashboardNav } from "@/components/DashboardNav";
 import { motion } from "framer-motion";
 import { Sparkles, TrendingUp, Plus, Database, Shield, ChevronDown, ChevronRight } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { useRestaurantData } from "@/lib/restaurantData";
-import { useAuth } from "@/components/AuthProvider";
+import { generateComboRecommendations } from "@/lib/aiEngine";
 
 const impactBadge = (level: string) => {
   const cls = level === "HIGH" ? "bg-destructive/10 text-destructive" : level === "MEDIUM" ? "bg-accent/10 text-accent" : "bg-secondary text-muted-foreground";
@@ -11,25 +11,13 @@ const impactBadge = (level: string) => {
 };
 
 const ComboEngine = () => {
-  const { session } = useAuth();
   const { menuItems, orders } = useRestaurantData();
   const [expandedCombo, setExpandedCombo] = useState<number | null>(null);
-  const [combos, setCombos] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    if (!session?.access_token) return;
-    setIsLoading(true);
-    fetch('/api/combo-engine', {
-      headers: { Authorization: `Bearer ${session.access_token}` }
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) setCombos(data);
-      })
-      .catch(console.error)
-      .finally(() => setIsLoading(false));
-  }, [session?.access_token, orders.length]);
+  const combos = useMemo(
+    () => generateComboRecommendations(menuItems, orders),
+    [menuItems, orders]
+  );
 
   return (
     <div className="min-h-screen bg-background">
@@ -52,10 +40,8 @@ const ComboEngine = () => {
         </div>
 
         <div className="mt-8 grid gap-6 sm:grid-cols-2">
-          {isLoading ? (
-            <div className="col-span-2 py-12 text-center text-muted-foreground"><Sparkles className="mx-auto h-8 w-8 animate-pulse text-accent mb-4" />Analyzing {(orders?.length || 0)} orders across neural networks...</div>
-          ) : combos.length === 0 ? (
-            <div className="col-span-2 py-12 text-center text-muted-foreground">Not enough order history to generate high-confidence combos.</div>
+          {combos.length === 0 ? (
+            <div className="col-span-2 py-12 text-center text-muted-foreground">Upload menu and order data to generate combo recommendations.</div>
           ) : combos.map((combo, i) => (
             <motion.div
               key={i}

@@ -53,42 +53,67 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
     const [profile, setProfile] = useState<RestaurantProfile>(defaultProfile);
     const [commissions, setCommissions] = useState<ChannelCommission[]>(defaultCommissions);
 
-    const fetchData = useCallback(async () => {
-        if (!user) {
-            setMenuItems([]);
-            setOrders([]);
-            setRestaurantId(null);
-            setIsLoading(false);
-            return;
-        }
+    // ─── DEMO MODE: hardcoded user ID matching AuthProvider ───
+    const DEMO_USER_ID = "demo-user-00000000-0000-0000-0000-000000000001";
 
+    const fetchData = useCallback(async () => {
         try {
             setIsLoading(true);
-            // 1. Get restaurant profile mapped to user
-            let { data: restData } = await supabase.from('restaurants').select('*').eq('user_id', user.id).single();
+
+            // 1. Look for a restaurant tied to the demo user
+            let { data: restData } = await supabase
+                .from('restaurants')
+                .select('*')
+                .eq('user_id', DEMO_USER_ID)
+                .single();
+
+            // 2. Auto-create if not found
             if (!restData) {
-                // If trigger failed or slow, wait 1s and retry
-                await new Promise(r => setTimeout(r, 1000));
-                const retry = await supabase.from('restaurants').select('*').eq('user_id', user.id).single();
-                restData = retry.data;
+                console.log("Demo mode: creating default restaurant...");
+                const { data: newRest, error: createErr } = await supabase
+                    .from('restaurants')
+                    .insert({
+                        user_id: DEMO_USER_ID,
+                        name: 'Demo Restaurant',
+                        location: 'Demo City',
+                    })
+                    .select()
+                    .single();
+
+                if (createErr) {
+                    console.error("Failed to create demo restaurant:", createErr);
+                    // Fall back to first available restaurant
+                    const { data: anyRest } = await supabase.from('restaurants').select('*').limit(1).single();
+                    restData = anyRest;
+                } else {
+                    restData = newRest;
+
+                    // Also create default channels for the demo restaurant
+                    await supabase.from('channels').insert([
+                        { restaurant_id: newRest.id, name: 'OFFLINE', commission_percentage: 0 },
+                        { restaurant_id: newRest.id, name: 'ZOMATO', commission_percentage: 25 },
+                        { restaurant_id: newRest.id, name: 'SWIGGY', commission_percentage: 22 },
+                        { restaurant_id: newRest.id, name: 'OTHER', commission_percentage: 15 },
+                    ]);
+                }
             }
 
             if (!restData) {
-                console.error("No restaurant profile found for user.");
+                console.warn("No restaurant found. Dashboard will show empty state.");
                 setIsLoading(false);
                 return;
             }
 
             setRestaurantId(restData.id);
             setProfile({
-                name: restData.name || "",
-                location: restData.location || "",
+                name: restData.name || "Demo Restaurant",
+                location: restData.location || "Demo City",
                 cuisine: restData.cuisine || "",
                 usesPOS: restData.setupComplete || false,
                 setupComplete: true
             });
 
-            // 2. Fetch parallel data
+            // 3. Fetch parallel data
             const [
                 { data: menuData },
                 { data: ordersData },
@@ -102,8 +127,7 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
             // Map Menu
             if (menuData) {
                 const mappedMenu: MenuItem[] = menuData.map((m: any) => ({
-                    id: m.id, // Usually a UUID string now, but the UI expects number, so we might have TS issues if id was strictly number. 
-                    // Let's ensure types are cast correctly or just ignore the number strictness
+                    id: m.id,
                     name: m.item_name,
                     price: m.selling_price,
                     cost: m.food_cost,
@@ -115,17 +139,16 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
 
             // Map Orders
             if (ordersData) {
-                // Orders are flat in DB (order_id separates them). We must group them by order_id to match the Context structure!
                 const grouped = new Map<string, OrderItem[]>();
                 const orderMeta = new Map<string, { channel: SalesChannel, timestamp: Date }>();
 
                 ordersData.forEach((row: any) => {
                     if (!grouped.has(row.order_id)) grouped.set(row.order_id, []);
                     grouped.get(row.order_id)!.push({
-                        menuItemId: row.item_name, // Using name since id changed
+                        menuItemId: row.item_name,
                         name: row.item_name,
                         qty: row.quantity,
-                        price: 0, // Fallback since DB structure is denormalized
+                        price: 0,
                         cost: 0
                     });
                     if (!orderMeta.has(row.order_id)) {
@@ -135,8 +158,6 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
 
                 const mappedOrders: Order[] = Array.from(grouped.entries()).map(([orderId, items]) => {
                     const meta = orderMeta.get(orderId)!;
-
-                    // Attempt to reconstruct total and costs from current menuItems list since not strictly stored in orders table
                     const enrichedItems = items.map(oi => {
                         const m = menuData?.find((md: any) => md.item_name === oi.name);
                         return {
@@ -177,7 +198,7 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
         } finally {
             setIsLoading(false);
         }
-    }, [user]);
+    }, []);
 
     useEffect(() => {
         fetchData();
@@ -202,17 +223,21 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
     };
 
     const addOrder = async (items: OrderItem[], channel: SalesChannel = "OFFLINE") => {
-        if (!restaurantId || !session?.access_token) return null;
+        if (!restaurantId) return null;
         try {
-            const res = await fetch('/api/orders/create', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-                body: JSON.stringify({ items, channel })
-            });
-            if (res.ok) {
-                await fetchData(); // simple refresh
-                const data = await res.json();
-                return { id: data.order_id, items, total: 0, totalCost: 0, margin: 0, timestamp: new Date(), channel } as Order;
+            const orderId = `ORD-${Date.now()}`;
+            const rows = items.map(i => ({
+                restaurant_id: restaurantId,
+                order_id: orderId,
+                item_name: i.name,
+                quantity: i.qty,
+                channel,
+                timestamp: new Date().toISOString()
+            }));
+            const { error } = await supabase.from('orders').insert(rows);
+            if (!error) {
+                await fetchData();
+                return { id: orderId, items, total: 0, totalCost: 0, margin: 0, timestamp: new Date(), channel } as Order;
             }
         } catch (e) {
             console.error(e);
@@ -221,47 +246,46 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
     };
 
     const importMenuItems = async (items: Omit<MenuItem, "id">[]) => {
-        if (!restaurantId || !session?.access_token) return { added: 0, duplicates: 0 };
+        if (!restaurantId) return { added: 0, duplicates: 0 };
         try {
-            const res = await fetch('/api/menu/upload', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-                body: JSON.stringify(items.map(i => ({ name: i.name, category: i.category, price: i.price, cost: i.cost })))
-            });
-            if (res.ok) {
+            const rows = items.map(i => ({
+                restaurant_id: restaurantId,
+                item_name: i.name,
+                category: i.category,
+                selling_price: i.price,
+                food_cost: i.cost
+            }));
+            const { error } = await supabase.from('menu_items').insert(rows);
+            if (!error) {
                 await fetchData();
                 return { added: items.length, duplicates: 0 };
             }
-        } catch (e) { }
+        } catch (e) { console.error(e); }
         return { added: 0, duplicates: 0 };
     };
 
     const importOrders = async (newOrders: Order[]) => {
-        if (!restaurantId || !session?.access_token) return 0;
+        if (!restaurantId) return 0;
         try {
-            // Flatten orders
             const flat: any[] = [];
             newOrders.forEach(o => {
                 o.items.forEach(i => {
                     flat.push({
+                        restaurant_id: restaurantId,
                         order_id: o.id,
-                        name: i.name,
-                        qty: i.qty,
+                        item_name: i.name,
+                        quantity: i.qty,
                         channel: o.channel,
                         timestamp: o.timestamp.toISOString()
                     });
                 });
             });
-            const res = await fetch('/api/orders/upload', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-                body: JSON.stringify(flat)
-            });
-            if (res.ok) {
+            const { error } = await supabase.from('orders').insert(flat);
+            if (!error) {
                 await fetchData();
                 return newOrders.length;
             }
-        } catch (e) { }
+        } catch (e) { console.error(e); }
         return 0;
     };
 
@@ -278,17 +302,16 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
     };
 
     const updateCommission = async (channel: SalesChannel, updates: Partial<ChannelCommission>) => {
-        if (!restaurantId || !session?.access_token) return;
+        if (!restaurantId) return;
         setCommissions(prev => prev.map(c => c.channel === channel ? { ...c, ...updates } : c));
 
-        // Find fully updated commission object to send to backend
         const target = commissions.find(c => c.channel === channel);
         if (target) {
-            await fetch('/api/channels', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-                body: JSON.stringify({ name: target.channel, commission_percentage: updates.commissionPct ?? target.commissionPct })
-            });
+            await supabase.from('channels').upsert({
+                restaurant_id: restaurantId,
+                name: target.channel,
+                commission_percentage: updates.commissionPct ?? target.commissionPct
+            }, { onConflict: 'restaurant_id,name' });
         }
     };
 

@@ -2,9 +2,9 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { RestaurantDataProvider } from "@/lib/restaurantData";
-import { AuthProvider, ProtectedRoute, PublicRoute } from "@/components/AuthProvider";
+import { AuthProvider } from "@/components/AuthProvider";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
@@ -27,18 +27,18 @@ const App = () => (
           <Sonner />
           <BrowserRouter>
             <Routes>
-              {/* Public Routes */}
+              {/* Landing page */}
               <Route path="/" element={<Index />} />
-              <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
+              <Route path="/login" element={<Login />} />
 
-              {/* Protected Routes */}
-              <Route path="/setup" element={<ProtectedRoute><RestaurantSetup /></ProtectedRoute>} />
-              <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-              <Route path="/menu" element={<ProtectedRoute><MenuIntelligence /></ProtectedRoute>} />
-              <Route path="/orders" element={<ProtectedRoute><OrdersSimulation /></ProtectedRoute>} />
-              <Route path="/combos" element={<ProtectedRoute><ComboEngine /></ProtectedRoute>} />
-              <Route path="/voice" element={<ProtectedRoute><VoiceCopilot /></ProtectedRoute>} />
-              <Route path="/insights" element={<ProtectedRoute><Insights /></ProtectedRoute>} />
+              {/* All pages accessible without auth in demo mode */}
+              <Route path="/setup" element={<RestaurantSetup />} />
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/menu" element={<MenuIntelligence />} />
+              <Route path="/orders" element={<OrdersSimulation />} />
+              <Route path="/combos" element={<ComboEngine />} />
+              <Route path="/voice" element={<VoiceCopilot />} />
+              <Route path="/insights" element={<Insights />} />
 
               <Route path="*" element={<NotFound />} />
             </Routes>
@@ -50,4 +50,3 @@ const App = () => (
 );
 
 export default App;
-
