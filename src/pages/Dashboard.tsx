@@ -30,6 +30,7 @@ import {
 } from "recharts";
 import { useState, useEffect, useMemo } from "react";
 import { useRestaurantData } from "@/lib/restaurantData";
+import { useNavigate } from "react-router-dom";
 import {
   generateDashboardInsights,
   generatePriceRecommendations,
@@ -63,6 +64,7 @@ const confidenceDot = (conf: number) => {
 };
 
 const Dashboard = () => {
+  const navigate = useNavigate();
   const { menuItems, orders, commissions, totalRevenue, totalOrders, avgOrderValue } = useRestaurantData();
   const [liveOrders, setLiveOrders] = useState<LiveOrder[]>([]);
   const [expandedInsight, setExpandedInsight] = useState<number | null>(null);
@@ -84,32 +86,40 @@ const Dashboard = () => {
   }, [menuItems, orders]);
 
   // Sales velocity for module status
-  const velocityData = useMemo(() => calculateSalesVelocity(menuItems, orders), [menuItems, orders]);
-  const hotItems = velocityData.filter(v => v.label === "🔥 Hot Seller" || v.label === "📈 Trending Up").length;
-  const coldItems = velocityData.filter(v => v.label === "❄️ Cold Item" || v.label === "📉 Slowing Down").length;
+  const velocityData = useMemo(() => {
+    try { return calculateSalesVelocity(menuItems, orders); } catch { return []; }
+  }, [menuItems, orders]);
+  const hotItems = velocityData.filter(v => v.velocityLabel === "🔥 Hot Seller" || v.velocityLabel === "📈 Trending Up").length;
+  const coldItems = velocityData.filter(v => v.velocityLabel === "❄️ Cold Item" || v.velocityLabel === "📉 Slowing Down").length;
 
   // Upsell suggestions
-  const upsellData = useMemo(() => generateUpsellSuggestions(menuItems, orders), [menuItems, orders]);
-  const totalUpsells = upsellData.reduce((s, u) => s + u.suggestions.length, 0);
+  const upsellData = useMemo(() => {
+    try { return generateUpsellSuggestions(menuItems, orders); } catch { return []; }
+  }, [menuItems, orders]);
+  const totalUpsells = upsellData.reduce((s, u) => s + (u.upsells?.length || 0), 0);
 
   // Low margin risk items
   const lowMarginRiskItems = useMemo(() => {
-    const avg = menuItems.reduce((s, m) => s + getOrderCountForItem(m.id, orders), 0) / (menuItems.length || 1);
-    return menuItems.filter(item => {
-      const margin = calculateMargin(item);
-      const count = getOrderCountForItem(item.id, orders);
-      return margin < 40 && count > avg;
-    }).length;
+    try {
+      const avg = menuItems.reduce((s, m) => s + getOrderCountForItem(m.id, orders), 0) / (menuItems.length || 1);
+      return menuItems.filter(item => {
+        const margin = calculateMargin(item);
+        const count = getOrderCountForItem(item.id, orders);
+        return margin < 40 && count > avg;
+      }).length;
+    } catch { return 0; }
   }, [menuItems, orders]);
 
   // Hidden stars count
   const hiddenStarsCount = useMemo(() => {
-    const avg = menuItems.reduce((s, m) => s + getOrderCountForItem(m.id, orders), 0) / (menuItems.length || 1);
-    return menuItems.filter(item => {
-      const margin = calculateMargin(item);
-      const count = getOrderCountForItem(item.id, orders);
-      return margin > 55 && count < avg * 0.6;
-    }).length;
+    try {
+      const avg = menuItems.reduce((s, m) => s + getOrderCountForItem(m.id, orders), 0) / (menuItems.length || 1);
+      return menuItems.filter(item => {
+        const margin = calculateMargin(item);
+        const count = getOrderCountForItem(item.id, orders);
+        return margin > 55 && count < avg * 0.6;
+      }).length;
+    } catch { return 0; }
   }, [menuItems, orders]);
 
   const forecastData = useMemo(() => {
@@ -157,7 +167,7 @@ const Dashboard = () => {
     { icon: Flame, name: "Sales Velocity", desc: "Trend & momentum scoring", status: orders.length > 0 ? "Active" : "Waiting", stat: hotItems > 0 ? `${hotItems} hot, ${coldItems} cold` : "Need orders", color: "text-orange-500", bgColor: "bg-orange-500/10", link: "/menu" },
     { icon: Eye, name: "Hidden Star Detection", desc: "High margin, under-promoted", status: hiddenStarsCount > 0 ? "Found" : "Scanning", stat: hiddenStarsCount > 0 ? `${hiddenStarsCount} found` : "0 detected", color: "text-violet-500", bgColor: "bg-violet-500/10", link: "/menu" },
     { icon: AlertTriangle, name: "Low-Margin Risk", desc: "High volume, low profit alert", status: lowMarginRiskItems > 0 ? "Alert" : "Clear", stat: lowMarginRiskItems > 0 ? `${lowMarginRiskItems} at risk` : "All safe", color: lowMarginRiskItems > 0 ? "text-red-500" : "text-emerald-500", bgColor: lowMarginRiskItems > 0 ? "bg-red-500/10" : "bg-emerald-500/10", link: "/menu" },
-    { icon: Layers, name: "Combo Engine", desc: "Association-based combos", status: orders.length >= 2 ? "Active" : "Waiting", stat: orders.length >= 2 ? "AI combos ready" : "Need 2+ orders", color: "text-cyan-500", bgColor: "bg-cyan-500/10", link: "/combo-engine" },
+    { icon: Layers, name: "Combo Engine", desc: "Association-based combos", status: orders.length >= 2 ? "Active" : "Waiting", stat: orders.length >= 2 ? "AI combos ready" : "Need 2+ orders", color: "text-cyan-500", bgColor: "bg-cyan-500/10", link: "/combos" },
     { icon: ArrowRightLeft, name: "Smart Upsell", desc: "Cross-sell prioritization", status: totalUpsells > 0 ? "Active" : "Waiting", stat: totalUpsells > 0 ? `${totalUpsells} suggestions` : "Need data", color: "text-pink-500", bgColor: "bg-pink-500/10", link: "/menu" },
     { icon: Tag, name: "Price Optimization", desc: "Elasticity-based pricing", status: priceRecs.length > 0 ? "Active" : "Waiting", stat: priceRecs.length > 0 ? `${priceRecs.filter(r => r.suggestedPrice !== r.currentPrice).length} recs` : "—", color: "text-amber-500", bgColor: "bg-amber-500/10", link: "/menu" },
     { icon: Package, name: "Inventory Signals", desc: "Performance-linked alerts", status: "Beta", stat: "Coming soon", color: "text-gray-400", bgColor: "bg-gray-500/10", link: "#" },
@@ -255,7 +265,7 @@ const Dashboard = () => {
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {aiModules.map((mod, i) => (
-              <motion.a key={mod.name} href={mod.link} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.05 * i }}
+              <motion.div key={mod.name} onClick={() => { if (mod.link !== '#') navigate(mod.link); }} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.05 * i }}
                 className="group relative flex items-center gap-3.5 rounded-xl border border-border/40 bg-card p-4 shadow-sm transition-all hover:border-primary/30 hover:shadow-md cursor-pointer overflow-hidden"
               >
                 <div className="absolute top-0 right-0 w-20 h-20 bg-primary/3 rounded-full blur-2xl -mr-8 -mt-8 pointer-events-none group-hover:bg-primary/8 transition-colors" />
@@ -273,7 +283,7 @@ const Dashboard = () => {
                   <p className={`text-[10px] font-semibold mt-1 ${mod.status === "Alert" ? "text-destructive" : mod.color}`}>{mod.stat}</p>
                 </div>
                 <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30 group-hover:text-primary transition-colors shrink-0" />
-              </motion.a>
+              </motion.div>
             ))}
           </div>
         </motion.div>
