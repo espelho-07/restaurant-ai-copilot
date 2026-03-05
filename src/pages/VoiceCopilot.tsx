@@ -135,9 +135,10 @@ const VoiceCopilot = () => {
     setUnmatchedPhrases(result.unmatched);
   }, [transcript, interimTranscript, menuItems]);
 
-  const confirmOrder = () => {
+  const confirmOrder = async () => {
     if (detectedItems.length === 0) return;
-    const order = addOrder(detectedItems);
+    const order = await addOrder(detectedItems);
+    if (!order) return;
     setOrderConfirmed(true);
     toast.success(`Order ${order.id} created!`, {
       description: `${detectedItems.length} items · ₹${total}`,
@@ -221,8 +222,8 @@ const VoiceCopilot = () => {
                 <button
                   onClick={() => setLanguage("en-IN")}
                   className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${language === "en-IN"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
                     }`}
                 >
                   <Globe className="h-3.5 w-3.5" /> English
@@ -230,8 +231,8 @@ const VoiceCopilot = () => {
                 <button
                   onClick={() => setLanguage("hi-IN")}
                   className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${language === "hi-IN"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
                     }`}
                 >
                   <Globe className="h-3.5 w-3.5" /> हिंदी
@@ -249,8 +250,8 @@ const VoiceCopilot = () => {
                 <button
                   onClick={isListening ? stopListening : startListening}
                   className={`relative z-10 flex h-24 w-24 items-center justify-center rounded-full transition-all duration-300 ${isListening
-                      ? "bg-primary text-primary-foreground shadow-lg glow-ring"
-                      : "bg-secondary text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                    ? "bg-primary text-primary-foreground shadow-lg glow-ring"
+                    : "bg-secondary text-muted-foreground hover:bg-primary/10 hover:text-primary"
                     }`}
                 >
                   {isListening ? <Mic className="h-10 w-10" /> : <MicOff className="h-10 w-10" />}
@@ -402,8 +403,8 @@ const VoiceCopilot = () => {
                   onClick={confirmOrder}
                   disabled={orderConfirmed}
                   className={`mt-4 w-full rounded-xl py-3 text-sm font-semibold transition-all ${orderConfirmed
-                      ? "bg-success text-success-foreground"
-                      : "bg-primary text-primary-foreground hover:brightness-110 glow-ring"
+                    ? "bg-success text-success-foreground"
+                    : "bg-primary text-primary-foreground hover:brightness-110 glow-ring"
                     }`}
                 >
                   {orderConfirmed ? "✓ Order Pushed to POS" : "Confirm & Push to POS"}

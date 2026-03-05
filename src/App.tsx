@@ -4,7 +4,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { RestaurantDataProvider } from "@/lib/restaurantData";
+import { AuthProvider, ProtectedRoute, PublicRoute } from "@/components/AuthProvider";
 import Index from "./pages/Index";
+import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import MenuIntelligence from "./pages/MenuIntelligence";
 import ComboEngine from "./pages/ComboEngine";
@@ -18,25 +20,32 @@ const queryClient = new QueryClient();
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <RestaurantDataProvider>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Index />} />
-            <Route path="/setup" element={<RestaurantSetup />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/menu" element={<MenuIntelligence />} />
-            <Route path="/orders" element={<OrdersSimulation />} />
-            <Route path="/combos" element={<ComboEngine />} />
-            <Route path="/voice" element={<VoiceCopilot />} />
-            <Route path="/insights" element={<Insights />} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </BrowserRouter>
-      </TooltipProvider>
-    </RestaurantDataProvider>
+    <AuthProvider>
+      <RestaurantDataProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <BrowserRouter>
+            <Routes>
+              {/* Public Routes */}
+              <Route path="/" element={<Index />} />
+              <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
+
+              {/* Protected Routes */}
+              <Route path="/setup" element={<ProtectedRoute><RestaurantSetup /></ProtectedRoute>} />
+              <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+              <Route path="/menu" element={<ProtectedRoute><MenuIntelligence /></ProtectedRoute>} />
+              <Route path="/orders" element={<ProtectedRoute><OrdersSimulation /></ProtectedRoute>} />
+              <Route path="/combos" element={<ProtectedRoute><ComboEngine /></ProtectedRoute>} />
+              <Route path="/voice" element={<ProtectedRoute><VoiceCopilot /></ProtectedRoute>} />
+              <Route path="/insights" element={<ProtectedRoute><Insights /></ProtectedRoute>} />
+
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </BrowserRouter>
+        </TooltipProvider>
+      </RestaurantDataProvider>
+    </AuthProvider>
   </QueryClientProvider>
 );
 

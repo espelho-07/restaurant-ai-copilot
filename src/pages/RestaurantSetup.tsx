@@ -62,7 +62,7 @@ const RestaurantSetup = () => {
       return;
     }
 
-    const { added, duplicates } = importMenuItems(result.items);
+    const { added, duplicates } = await importMenuItems(result.items);
     setMenuParseResult({
       count: added,
       errors: [
@@ -89,7 +89,7 @@ const RestaurantSetup = () => {
       return;
     }
 
-    const count = importOrders(result.orders);
+    const count = await importOrders(result.orders);
     setOrderParseResult({
       count,
       errors: result.errors,

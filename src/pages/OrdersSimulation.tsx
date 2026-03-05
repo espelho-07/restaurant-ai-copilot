@@ -94,10 +94,11 @@ const OrdersSimulation = () => {
         return { item, count: bestCount, pct };
     }, [cart, orders, menuItems]);
 
-    const handleGenerateOrder = () => {
+    const handleGenerateOrder = async () => {
         if (cart.length === 0) return;
 
-        const order = addOrder(cart, channel);
+        const order = await addOrder(cart, channel);
+        if (!order) return;
         setOrderCount((c) => c + 1);
         setCart([]);
         toast.success(`Order ${order.id} generated!`, {

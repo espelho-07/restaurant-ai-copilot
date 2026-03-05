@@ -14,14 +14,14 @@ import {
   Activity,
   Globe
 } from "lucide-react";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRestaurantData } from "@/lib/restaurantData";
 import {
   calculateMargin,
   calculateOnlineMargin,
   getOrderCountForItem,
-  generatePriceRecommendations,
 } from "@/lib/aiEngine";
+import { useAuth } from "@/components/AuthProvider";
 
 const tagLabel: Record<string, string> = {
   "top-seller": "Top Seller",
@@ -53,9 +53,25 @@ const MenuIntelligence = () => {
   const [activeFilter, setActiveFilter] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
 
+  const { session } = useAuth();
   const [newItem, setNewItem] = useState({ name: "", price: "", cost: "", category: "" });
 
-  const priceRecs = useMemo(() => generatePriceRecommendations(menuItems, orders, commissions), [menuItems, orders, commissions]);
+  const [priceRecs, setPriceRecs] = useState<any[]>([]);
+  const [isLoadingPricing, setIsLoadingPricing] = useState(true);
+
+  useEffect(() => {
+    if (!session?.access_token) return;
+    setIsLoadingPricing(true);
+    fetch('/api/price-optimization', {
+      headers: { Authorization: `Bearer ${session.access_token}` }
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) setPriceRecs(data);
+      })
+      .catch(console.error)
+      .finally(() => setIsLoadingPricing(false));
+  }, [session?.access_token, orders.length]);
 
   const avgCommission = useMemo(() => {
     const active = commissions.filter(c => c.channel !== "OFFLINE" && c.enabled);
@@ -144,7 +160,9 @@ const MenuIntelligence = () => {
               <h3 className="font-display text-sm font-semibold">AI Price Optimization</h3>
               <span className="text-xs text-muted-foreground">Based on {orders.length} order analysis</span>
             </div>
-            {priceRecs.filter((r) => r.suggestedPrice !== r.currentPrice || (r.suggestedOnlinePrice && r.suggestedOnlinePrice !== r.currentPrice)).slice(0, 6).map((rec, i) => (
+            {isLoadingPricing ? (
+              <div className="py-8 text-center text-muted-foreground text-sm">Calculating price elasticity...</div>
+            ) : priceRecs.filter((r) => r.suggestedPrice !== r.currentPrice || (r.suggestedOnlinePrice && r.suggestedOnlinePrice !== r.currentPrice)).slice(0, 6).map((rec, i) => (
               <motion.div key={rec.menuItem.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} className="glass-card p-4">
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
