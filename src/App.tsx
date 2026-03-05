@@ -6,7 +6,6 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { RestaurantDataProvider } from "@/lib/restaurantData";
 import { AuthProvider } from "@/components/AuthProvider";
 import Index from "./pages/Index";
-import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import MenuIntelligence from "./pages/MenuIntelligence";
 import ComboEngine from "./pages/ComboEngine";
@@ -29,16 +28,18 @@ const App = () => (
             <Routes>
               {/* Landing page */}
               <Route path="/" element={<Index />} />
-              <Route path="/login" element={<Login />} />
 
-              {/* All pages accessible without auth in demo mode */}
-              <Route path="/setup" element={<RestaurantSetup />} />
+              {/* All app pages — no auth required */}
               <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/setup" element={<RestaurantSetup />} />
               <Route path="/menu" element={<MenuIntelligence />} />
               <Route path="/orders" element={<OrdersSimulation />} />
               <Route path="/combos" element={<ComboEngine />} />
               <Route path="/voice" element={<VoiceCopilot />} />
               <Route path="/insights" element={<Insights />} />
+
+              {/* Legacy login route → redirect to dashboard */}
+              <Route path="/login" element={<Navigate to="/dashboard" replace />} />
 
               <Route path="*" element={<NotFound />} />
             </Routes>

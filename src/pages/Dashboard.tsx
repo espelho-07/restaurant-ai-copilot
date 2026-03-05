@@ -82,9 +82,10 @@ const Dashboard = () => {
   }, [menuItems, orders]);
 
   const hiddenStar = useMemo(() => {
+    if (menuItems.length === 0) return { name: "—", margin: "0" };
     let best = menuItems[0]; let bestScore = 0;
     for (const item of menuItems) { const margin = calculateMargin(item); const count = getOrderCountForItem(item.id, orders); const avg = menuItems.reduce((s, m) => s + getOrderCountForItem(m.id, orders), 0) / menuItems.length; if (margin > 50 && count < avg) { const score = margin * (avg - count); if (score > bestScore) { bestScore = score; best = item; } } }
-    return { name: best?.name || "—", margin: calculateMargin(best).toFixed(0) };
+    return { name: best?.name || "—", margin: best ? calculateMargin(best).toFixed(0) : "0" };
   }, [menuItems, orders]);
 
   const forecastData = useMemo(() => {
@@ -135,6 +136,59 @@ const Dashboard = () => {
     const interval = setInterval(() => { const d = liveOrderPool[Math.floor(Math.random() * liveOrderPool.length)]; const now = new Date(); const t = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }); counter++; setLiveOrders((prev) => [{ id: counter, time: t, ...d }, ...prev].slice(0, 5)); }, 4000);
     return () => clearInterval(interval);
   }, []);
+
+  // ─── SETUP GUARD ────────────────────────────────────────────
+  const isSetupDone = menuItems.length > 0;
+
+  if (!isSetupDone) {
+    return (
+      <div className="min-h-screen bg-background">
+        <DashboardNav />
+        <div className="flex min-h-[80vh] flex-col items-center justify-center px-6">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full max-w-md text-center"
+          >
+            <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-3xl bg-primary/10">
+              <BarChart3 className="h-10 w-10 text-primary" />
+            </div>
+            <h1 className="font-display text-2xl font-bold">Setup Required</h1>
+            <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
+              Your Command Center is ready — but first you need to add your restaurant and upload your menu data.
+            </p>
+
+            <div className="mt-8 space-y-3">
+              <a
+                href="/setup"
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition-all hover:brightness-110 glow-ring"
+              >
+                <Sparkles className="h-4 w-4" />
+                Setup My Restaurant
+              </a>
+              <p className="text-xs text-muted-foreground">
+                Takes ~2 minutes · Upload CSV or enter data manually
+              </p>
+            </div>
+
+            <div className="mt-10 grid grid-cols-3 gap-4 text-center">
+              {[
+                { icon: "🏪", label: "Add Restaurant", desc: "Name, location, cuisine" },
+                { icon: "📄", label: "Upload Menu", desc: "CSV with prices & costs" },
+                { icon: "📊", label: "Get Insights", desc: "AI revenue analysis" },
+              ].map((s) => (
+                <div key={s.label} className="glass-card p-4">
+                  <p className="text-2xl">{s.icon}</p>
+                  <p className="mt-2 text-xs font-semibold">{s.label}</p>
+                  <p className="text-[10px] text-muted-foreground">{s.desc}</p>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">

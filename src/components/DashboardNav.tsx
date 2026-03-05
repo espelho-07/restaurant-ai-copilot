@@ -1,6 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { BarChart3, Brain, Mic, Utensils, Layers, FileText, Home, Settings, ShoppingCart, LogOut } from "lucide-react";
-import { useAuth } from "@/components/AuthProvider";
+import { BarChart3, Brain, Mic, Utensils, Layers, FileText, Home, Settings, ShoppingCart } from "lucide-react";
 
 const navItems = [
   { label: "Home", path: "/", icon: Home },
@@ -15,7 +14,6 @@ const navItems = [
 
 export function DashboardNav() {
   const location = useLocation();
-  const { user, signOut } = useAuth();
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/50 bg-background/80 backdrop-blur-xl">
@@ -46,17 +44,12 @@ export function DashboardNav() {
         </nav>
 
         <div className="flex items-center gap-3">
-          {user && (
-            <button
-              onClick={signOut}
-              className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-all hover:bg-secondary hover:text-foreground"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-              Sign Out
-            </button>
-          )}
-          <div className="hidden h-8 w-8 items-center justify-center rounded-full bg-accent text-accent-foreground text-xs font-bold sm:flex uppercase">
-            {user?.email?.[0] || "R"}
+          {/* Demo Mode badge */}
+          <span className="rounded-full bg-accent/10 px-3 py-1 text-[10px] font-bold text-accent uppercase tracking-wider">
+            Demo Mode
+          </span>
+          <div className="hidden h-8 w-8 items-center justify-center rounded-full bg-accent text-accent-foreground text-xs font-bold sm:flex">
+            D
           </div>
         </div>
       </div>

@@ -544,3 +544,363 @@ export function parseVoiceOrder(
     }
     return { items: results, unmatched };
 }
+
+// ─── MENU ENGINEERING MATRIX (BCG-Style) ──────────────────────────
+// Classifies items into Stars / Plowhorses / Puzzles / Dogs based on
+// popularity (order count) and profitability (margin %).
+
+export type MenuClass = "star" | "plowhorse" | "puzzle" | "dog";
+
+export interface MenuEngineeringItem {
+    item: MenuItem;
+    orderCount: number;
+    marginPct: number;
+    revenue: number;
+    profit: number;
+    classification: MenuClass;
+    recommendation: string;
+}
+
+export function generateMenuEngineering(
+    menuItems: MenuItem[],
+    orders: Order[]
+): MenuEngineeringItem[] {
+    if (menuItems.length === 0) return [];
+
+    // Calculate metrics per item
+    const itemMetrics = menuItems.map((item) => {
+        const orderCount = getOrderCountForItem(item.id, orders);
+        const marginPct = calculateMargin(item);
+        const revenue = orderCount * item.price;
+        const profit = orderCount * (item.price - item.cost);
+        return { item, orderCount, marginPct, revenue, profit };
+    });
+
+    // Determine medians for classification
+    const sortedByOrders = [...itemMetrics].sort((a, b) => a.orderCount - b.orderCount);
+    const sortedByMargin = [...itemMetrics].sort((a, b) => a.marginPct - b.marginPct);
+    const medianOrders = sortedByOrders[Math.floor(sortedByOrders.length / 2)]?.orderCount || 0;
+    const medianMargin = sortedByMargin[Math.floor(sortedByMargin.length / 2)]?.marginPct || 50;
+
+    return itemMetrics.map((m) => {
+        const highPop = m.orderCount >= medianOrders;
+        const highMargin = m.marginPct >= medianMargin;
+
+        let classification: MenuClass;
+        let recommendation: string;
+
+        if (highPop && highMargin) {
+            classification = "star";
+            recommendation = "Maintain visibility and pricing. This is a top performer.";
+        } else if (highPop && !highMargin) {
+            classification = "plowhorse";
+            recommendation = "Increase price gradually or reduce food cost. High demand tolerates small price changes.";
+        } else if (!highPop && highMargin) {
+            classification = "puzzle";
+            recommendation = "Promote heavily — place prominently on menu. High margin potential if volume increases.";
+        } else {
+            classification = "dog";
+            recommendation = "Consider removing or completely reworking. Low demand and low profitability.";
+        }
+
+        return { ...m, classification, recommendation };
+    }).sort((a, b) => b.profit - a.profit);
+}
+
+// ─── PEAK HOUR / DAY ANALYSIS ─────────────────────────────────────
+
+export interface TimeSlotAnalysis {
+    dayOfWeek: string;
+    hourSlot: string;
+    orderCount: number;
+    revenue: number;
+    avgOrderValue: number;
+    topItems: { name: string; count: number }[];
+}
+
+export function analyzeTimeTrends(orders: Order[]): {
+    peakDays: { day: string; orders: number; revenue: number }[];
+    peakHours: { hour: string; orders: number; revenue: number }[];
+    heatmap: TimeSlotAnalysis[];
+} {
+    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const dayMap = new Map<string, { orders: number; revenue: number }>();
+    const hourMap = new Map<string, { orders: number; revenue: number }>();
+    const heatmapMap = new Map<string, { orders: Order[] }>();
+
+    for (const order of orders) {
+        const d = new Date(order.timestamp);
+        const dayName = days[d.getDay()];
+        const hour = d.getHours();
+        const hourSlot = `${hour.toString().padStart(2, "0")}:00-${(hour + 1).toString().padStart(2, "0")}:00`;
+
+        // Day aggregation
+        const dayData = dayMap.get(dayName) || { orders: 0, revenue: 0 };
+        dayData.orders++; dayData.revenue += order.total;
+        dayMap.set(dayName, dayData);
+
+        // Hour aggregation
+        const hourData = hourMap.get(hourSlot) || { orders: 0, revenue: 0 };
+        hourData.orders++; hourData.revenue += order.total;
+        hourMap.set(hourSlot, hourData);
+
+        // Heatmap
+        const key = `${dayName}-${hourSlot}`;
+        if (!heatmapMap.has(key)) heatmapMap.set(key, { orders: [] });
+        heatmapMap.get(key)!.orders.push(order);
+    }
+
+    const peakDays = Array.from(dayMap.entries())
+        .map(([day, d]) => ({ day, ...d }))
+        .sort((a, b) => b.orders - a.orders);
+
+    const peakHours = Array.from(hourMap.entries())
+        .map(([hour, d]) => ({ hour, ...d }))
+        .sort((a, b) => b.orders - a.orders);
+
+    const heatmap: TimeSlotAnalysis[] = Array.from(heatmapMap.entries()).map(([key, data]) => {
+        const [dayOfWeek, hourSlot] = key.split("-");
+        const revenue = data.orders.reduce((s, o) => s + o.total, 0);
+        const itemCounts = new Map<string, number>();
+        for (const o of data.orders) for (const i of o.items) itemCounts.set(i.name, (itemCounts.get(i.name) || 0) + i.qty);
+        const topItems = Array.from(itemCounts.entries()).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 3);
+        return { dayOfWeek, hourSlot, orderCount: data.orders.length, revenue, avgOrderValue: revenue / data.orders.length, topItems };
+    });
+
+    return { peakDays, peakHours, heatmap };
+}
+
+// ─── CATEGORY HEALTH SCORING ──────────────────────────────────────
+
+export interface CategoryHealth {
+    category: string;
+    itemCount: number;
+    totalOrders: number;
+    totalRevenue: number;
+    avgMargin: number;
+    healthScore: number;    // 0-100
+    grade: "A" | "B" | "C" | "D" | "F";
+    issues: string[];
+    opportunities: string[];
+}
+
+export function analyzeCategoryHealth(
+    menuItems: MenuItem[],
+    orders: Order[]
+): CategoryHealth[] {
+    const categories = new Map<string, MenuItem[]>();
+    for (const item of menuItems) {
+        if (!categories.has(item.category)) categories.set(item.category, []);
+        categories.get(item.category)!.push(item);
+    }
+
+    const results: CategoryHealth[] = [];
+    const totalAllOrders = orders.length;
+
+    for (const [category, items] of categories) {
+        const catOrders = items.reduce((s, item) => s + getOrderCountForItem(item.id, orders), 0);
+        const catRevenue = items.reduce((s, item) => s + getOrderCountForItem(item.id, orders) * item.price, 0);
+        const avgMargin = items.reduce((s, item) => s + calculateMargin(item), 0) / items.length;
+        const issues: string[] = [];
+        const opportunities: string[] = [];
+
+        // Scoring dimensions (each 0-25, total 0-100)
+        const marginScore = Math.min(avgMargin / 60 * 25, 25);                           // Higher margin = better
+        const demandScore = Math.min((catOrders / Math.max(totalAllOrders, 1)) * 100, 25); // More orders = better
+        const diversityScore = Math.min(items.length / 5 * 25, 25);                       // More items in category = more options
+        const profitScore = catRevenue > 0 ? Math.min((catRevenue / Math.max(totalAllOrders * 100, 1)) * 25, 25) : 0;
+
+        const healthScore = Math.round(marginScore + demandScore + diversityScore + profitScore);
+
+        // Identify issues
+        if (avgMargin < 40) issues.push(`Low average margin (${avgMargin.toFixed(0)}%). Consider pricing review.`);
+        if (catOrders === 0) issues.push(`Zero orders. Category may need promotion or menu changes.`);
+        const lowMarginItems = items.filter(i => calculateMargin(i) < 35);
+        if (lowMarginItems.length > 0) issues.push(`${lowMarginItems.length} item(s) below 35% margin: ${lowMarginItems.map(i => i.name).join(", ")}`);
+
+        // Identify opportunities
+        const highMarginLowDemand = items.filter(i => calculateMargin(i) > 55 && getOrderCountForItem(i.id, orders) < 3);
+        if (highMarginLowDemand.length > 0) opportunities.push(`Promote high-margin items: ${highMarginLowDemand.map(i => i.name).join(", ")}`);
+        if (items.length < 3) opportunities.push(`Add more items to this category for better customer choice.`);
+
+        const grade: "A" | "B" | "C" | "D" | "F" = healthScore >= 80 ? "A" : healthScore >= 60 ? "B" : healthScore >= 40 ? "C" : healthScore >= 20 ? "D" : "F";
+
+        results.push({ category, itemCount: items.length, totalOrders: catOrders, totalRevenue: catRevenue, avgMargin, healthScore, grade, issues, opportunities });
+    }
+
+    return results.sort((a, b) => b.healthScore - a.healthScore);
+}
+
+// ─── WASTAGE RISK DETECTION ───────────────────────────────────────
+
+export interface WastageRisk {
+    item: MenuItem;
+    riskLevel: "high" | "medium" | "low";
+    reason: string;
+    weeklyOrderEstimate: number;
+    costAtRisk: number;  // Estimated wastage cost/week
+}
+
+export function detectWastageRisks(
+    menuItems: MenuItem[],
+    orders: Order[]
+): WastageRisk[] {
+    const totalWeeks = Math.max(1, orders.length > 0
+        ? Math.ceil((Date.now() - new Date(Math.min(...orders.map(o => new Date(o.timestamp).getTime()))).getTime()) / (7 * 24 * 60 * 60 * 1000))
+        : 1);
+
+    const risks: WastageRisk[] = [];
+
+    for (const item of menuItems) {
+        const orderCount = getOrderCountForItem(item.id, orders);
+        const weeklyOrders = orderCount / totalWeeks;
+
+        let riskLevel: "high" | "medium" | "low";
+        let reason: string;
+
+        if (weeklyOrders < 1 && item.cost > 50) {
+            riskLevel = "high";
+            reason = `Only ${orderCount} orders total (${weeklyOrders.toFixed(1)}/week). High food cost (₹${item.cost}) means significant wastage risk from spoiled perishables.`;
+        } else if (weeklyOrders < 3 && item.cost > 30) {
+            riskLevel = "medium";
+            reason = `Low demand (${weeklyOrders.toFixed(1)}/week) with moderate food cost (₹${item.cost}). Consider batch-preparation or ingredient sharing.`;
+        } else if (weeklyOrders < 2) {
+            riskLevel = "low";
+            reason = `Low volume (${weeklyOrders.toFixed(1)}/week) but manageable cost.`;
+        } else {
+            continue; // No risk
+        }
+
+        const costAtRisk = Math.round(item.cost * Math.max(3 - weeklyOrders, 0.5));
+        risks.push({ item, riskLevel, reason, weeklyOrderEstimate: Math.round(weeklyOrders * 10) / 10, costAtRisk });
+    }
+
+    return risks.sort((a, b) => b.costAtRisk - a.costAtRisk);
+}
+
+// ─── PRICE ELASTICITY ESTIMATION ──────────────────────────────────
+
+export interface ElasticityEstimate {
+    item: MenuItem;
+    currentPrice: number;
+    priceFloor: number;       // Minimum viable price (cost + 20%)
+    priceCeiling: number;     // Maximum estimated price before demand drops >20%
+    elasticityScore: number;  // -3 (very elastic) to +3 (very inelastic)
+    elasticityLabel: string;
+    maxPriceIncrease: number; // Max safe increase in ₹
+    reasoning: string;
+}
+
+export function estimatePriceElasticity(
+    menuItems: MenuItem[],
+    orders: Order[]
+): ElasticityEstimate[] {
+    const totalOrders = orders.length || 1;
+
+    return menuItems.map((item) => {
+        const orderCount = getOrderCountForItem(item.id, orders);
+        const orderFreq = orderCount / totalOrders;
+        const margin = calculateMargin(item);
+
+        // Elasticity heuristics (no actual price change data, so we estimate)
+        // High frequency + necessity → inelastic
+        // Low frequency + luxury → elastic
+        let elasticityScore = 0;
+
+        // Demand factor: high demand items are more likely inelastic
+        if (orderFreq > 0.5) elasticityScore += 2;
+        else if (orderFreq > 0.2) elasticityScore += 1;
+        else if (orderFreq < 0.05) elasticityScore -= 1;
+
+        // Price point factor: cheaper items are more inelastic (people don't notice small changes)
+        if (item.price < 100) elasticityScore += 1;
+        else if (item.price > 300) elasticityScore -= 1;
+
+        // Category factor: staples are inelastic, luxuries are elastic
+        const stapleCategories = ["Main Course", "Breads", "Rice", "Beverages"];
+        const luxuryCategories = ["Desserts", "Premium", "Specials"];
+        if (stapleCategories.some(c => item.category.includes(c))) elasticityScore += 1;
+        if (luxuryCategories.some(c => item.category.includes(c))) elasticityScore -= 1;
+
+        // Clamp
+        elasticityScore = Math.max(-3, Math.min(3, elasticityScore));
+
+        const elasticityLabel = elasticityScore >= 2 ? "Very Inelastic (safe to increase)"
+            : elasticityScore >= 1 ? "Inelastic (moderate increase OK)"
+                : elasticityScore === 0 ? "Neutral"
+                    : elasticityScore >= -1 ? "Elastic (price sensitive)"
+                        : "Very Elastic (avoid price increase)";
+
+        const priceFloor = Math.ceil(item.cost * 1.2);
+        const maxIncreasePct = elasticityScore >= 2 ? 0.15 : elasticityScore >= 1 ? 0.10 : elasticityScore === 0 ? 0.05 : 0.02;
+        const maxPriceIncrease = Math.round(item.price * maxIncreasePct / 5) * 5;
+        const priceCeiling = item.price + maxPriceIncrease;
+
+        const reasoning = `Demand: ${orderCount} orders (${(orderFreq * 100).toFixed(0)}% freq). ` +
+            `Price: ₹${item.price} (${item.price < 100 ? "low" : item.price < 300 ? "mid" : "high"} range). ` +
+            `Category: ${item.category}. Estimated safe increase: ₹${maxPriceIncrease}.`;
+
+        return { item, currentPrice: item.price, priceFloor, priceCeiling, elasticityScore, elasticityLabel, maxPriceIncrease, reasoning };
+    }).sort((a, b) => b.elasticityScore - a.elasticityScore);
+}
+
+// ─── REVENUE SUMMARY CALCULATOR ───────────────────────────────────
+
+export interface RevenueSummary {
+    totalRevenue: number;
+    totalProfit: number;
+    totalCost: number;
+    overallMarginPct: number;
+    avgOrderValue: number;
+    avgItemsPerOrder: number;
+    topRevenueItems: { name: string; revenue: number; orders: number }[];
+    topProfitItems: { name: string; profit: number; marginPct: number }[];
+    monthlySummary: { month: string; revenue: number; orders: number; avgMargin: number }[];
+}
+
+export function calculateRevenueSummary(
+    menuItems: MenuItem[],
+    orders: Order[]
+): RevenueSummary {
+    const totalRevenue = orders.reduce((s, o) => s + o.total, 0);
+    const totalCost = orders.reduce((s, o) => s + o.totalCost, 0);
+    const totalProfit = totalRevenue - totalCost;
+    const overallMarginPct = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+    const avgOrderValue = orders.length > 0 ? totalRevenue / orders.length : 0;
+    const avgItemsPerOrder = orders.length > 0 ? orders.reduce((s, o) => s + o.items.reduce((is, i) => is + i.qty, 0), 0) / orders.length : 0;
+
+    // Top revenue items
+    const itemRevenue = menuItems.map((item) => {
+        const count = getOrderCountForItem(item.id, orders);
+        return { name: item.name, revenue: count * item.price, orders: count };
+    }).sort((a, b) => b.revenue - a.revenue);
+
+    // Top profit items
+    const itemProfit = menuItems.map((item) => {
+        const count = getOrderCountForItem(item.id, orders);
+        return { name: item.name, profit: count * (item.price - item.cost), marginPct: calculateMargin(item) };
+    }).sort((a, b) => b.profit - a.profit);
+
+    // Monthly summary
+    const monthMap = new Map<string, { revenue: number; orders: number; margins: number[] }>();
+    for (const order of orders) {
+        const d = new Date(order.timestamp);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        if (!monthMap.has(key)) monthMap.set(key, { revenue: 0, orders: 0, margins: [] });
+        const m = monthMap.get(key)!;
+        m.revenue += order.total;
+        m.orders++;
+        m.margins.push(order.margin);
+    }
+    const monthlySummary = Array.from(monthMap.entries())
+        .map(([month, d]) => ({ month, revenue: d.revenue, orders: d.orders, avgMargin: d.margins.reduce((s, m) => s + m, 0) / d.margins.length }))
+        .sort((a, b) => a.month.localeCompare(b.month));
+
+    return {
+        totalRevenue, totalProfit, totalCost, overallMarginPct, avgOrderValue, avgItemsPerOrder,
+        topRevenueItems: itemRevenue.slice(0, 5),
+        topProfitItems: itemProfit.slice(0, 5),
+        monthlySummary,
+    };
+}
+

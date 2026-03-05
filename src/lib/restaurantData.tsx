@@ -53,53 +53,55 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
     const [profile, setProfile] = useState<RestaurantProfile>(defaultProfile);
     const [commissions, setCommissions] = useState<ChannelCommission[]>(defaultCommissions);
 
-    // ─── DEMO MODE: hardcoded user ID matching AuthProvider ───
-    const DEMO_USER_ID = "demo-user-00000000-0000-0000-0000-000000000001";
+    const STORAGE_KEY = "demo_restaurant_id";
 
     const fetchData = useCallback(async () => {
         try {
             setIsLoading(true);
 
-            // 1. Look for a restaurant tied to the demo user
-            let { data: restData } = await supabase
-                .from('restaurants')
-                .select('*')
-                .eq('user_id', DEMO_USER_ID)
-                .single();
+            // 1. Try to get cached restaurant ID from localStorage
+            const cachedId = localStorage.getItem(STORAGE_KEY);
+            let restData: any = null;
 
-            // 2. Auto-create if not found
+            if (cachedId) {
+                const { data } = await supabase.from('restaurants').select('*').eq('id', cachedId).maybeSingle();
+                restData = data;
+            }
+
+            // 2. Fall back to first available restaurant in DB
+            if (!restData) {
+                const { data: anyRest } = await supabase.from('restaurants').select('*').limit(1).maybeSingle();
+                restData = anyRest;
+                if (restData) localStorage.setItem(STORAGE_KEY, restData.id);
+            }
+
+            // 3. Auto-create a new restaurant if DB is empty
             if (!restData) {
                 console.log("Demo mode: creating default restaurant...");
                 const { data: newRest, error: createErr } = await supabase
                     .from('restaurants')
-                    .insert({
-                        user_id: DEMO_USER_ID,
-                        name: 'Demo Restaurant',
-                        location: 'Demo City',
-                    })
+                    .insert({ name: 'My Restaurant', location: 'Set your location' })
                     .select()
                     .single();
 
                 if (createErr) {
-                    console.error("Failed to create demo restaurant:", createErr);
-                    // Fall back to first available restaurant
-                    const { data: anyRest } = await supabase.from('restaurants').select('*').limit(1).single();
-                    restData = anyRest;
-                } else {
-                    restData = newRest;
-
-                    // Also create default channels for the demo restaurant
-                    await supabase.from('channels').insert([
-                        { restaurant_id: newRest.id, name: 'OFFLINE', commission_percentage: 0 },
-                        { restaurant_id: newRest.id, name: 'ZOMATO', commission_percentage: 25 },
-                        { restaurant_id: newRest.id, name: 'SWIGGY', commission_percentage: 22 },
-                        { restaurant_id: newRest.id, name: 'OTHER', commission_percentage: 15 },
-                    ]);
+                    console.error("Failed to create restaurant:", createErr);
+                    setIsLoading(false);
+                    return;
                 }
+                restData = newRest;
+                localStorage.setItem(STORAGE_KEY, newRest.id);
+
+                // Create default channels
+                await supabase.from('channels').insert([
+                    { restaurant_id: newRest.id, name: 'OFFLINE', commission_percentage: 0 },
+                    { restaurant_id: newRest.id, name: 'ZOMATO', commission_percentage: 25 },
+                    { restaurant_id: newRest.id, name: 'SWIGGY', commission_percentage: 22 },
+                    { restaurant_id: newRest.id, name: 'OTHER', commission_percentage: 15 },
+                ]);
             }
 
             if (!restData) {
-                console.warn("No restaurant found. Dashboard will show empty state.");
                 setIsLoading(false);
                 return;
             }
@@ -206,26 +208,42 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
 
     const addMenuItem = async (item: Omit<MenuItem, "id">) => {
         if (!restaurantId) return;
-        const { data, error } = await supabase.from('menu_items').insert({
-            restaurant_id: restaurantId,
-            item_name: item.name,
-            category: item.category,
-            selling_price: item.price,
-            food_cost: item.cost
-        }).select().single();
 
-        if (!error && data) {
-            setMenuItems(prev => [{
-                ...item,
-                id: data.id as unknown as number
-            }, ...prev]);
+        // Optimistic UI update (JS CRUD)
+        const tempId = Date.now();
+        setMenuItems(prev => [{ ...item, id: tempId }, ...prev]);
+
+        try {
+            const { data, error } = await supabase.from('menu_items').insert({
+                restaurant_id: restaurantId,
+                item_name: item.name,
+                category: item.category,
+                selling_price: item.price,
+                food_cost: item.cost
+            }).select().single();
+
+            if (!error && data) {
+                setMenuItems(prev => prev.map(m => m.id === tempId ? { ...m, id: data.id as unknown as number } : m));
+            }
+        } catch (e) {
+            console.warn("Supabase insert failed, keeping local state for demo", e);
         }
     };
 
     const addOrder = async (items: OrderItem[], channel: SalesChannel = "OFFLINE") => {
         if (!restaurantId) return null;
+
+        const orderId = `ORD-${Date.now()}`;
+        const total = items.reduce((s, i) => s + i.price * i.qty, 0);
+        const totalCost = items.reduce((s, i) => s + i.cost * i.qty, 0);
+        const margin = total > 0 ? ((total - totalCost) / total) * 100 : 0;
+
+        const newOrder: Order = { id: orderId, items, total, totalCost, margin, timestamp: new Date(), channel };
+
+        // Optimistic update (JS CRUD)
+        setOrders(prev => [newOrder, ...prev]);
+
         try {
-            const orderId = `ORD-${Date.now()}`;
             const rows = items.map(i => ({
                 restaurant_id: restaurantId,
                 order_id: orderId,
@@ -234,19 +252,22 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
                 channel,
                 timestamp: new Date().toISOString()
             }));
-            const { error } = await supabase.from('orders').insert(rows);
-            if (!error) {
-                await fetchData();
-                return { id: orderId, items, total: 0, totalCost: 0, margin: 0, timestamp: new Date(), channel } as Order;
-            }
+            await supabase.from('orders').insert(rows);
+            // Non-blocking fetch in background
+            fetchData();
         } catch (e) {
-            console.error(e);
+            console.warn("Supabase insert failed, keeping local state for demo", e);
         }
-        return null;
+        return newOrder;
     };
 
     const importMenuItems = async (items: Omit<MenuItem, "id">[]) => {
         if (!restaurantId) return { added: 0, duplicates: 0 };
+
+        // Optimistic update (JS CRUD)
+        const newItems = items.map((item, i) => ({ ...item, id: Date.now() + i }));
+        setMenuItems(prev => [...newItems, ...prev]);
+
         try {
             const rows = items.map(i => ({
                 restaurant_id: restaurantId,
@@ -255,17 +276,22 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
                 selling_price: i.price,
                 food_cost: i.cost
             }));
-            const { error } = await supabase.from('menu_items').insert(rows);
-            if (!error) {
-                await fetchData();
-                return { added: items.length, duplicates: 0 };
-            }
-        } catch (e) { console.error(e); }
-        return { added: 0, duplicates: 0 };
+            await supabase.from('menu_items').insert(rows);
+            // Non-blocking fetch in background
+            fetchData();
+            return { added: items.length, duplicates: 0 };
+        } catch (e) {
+            console.warn("Supabase import failed, keeping local state for demo", e);
+            return { added: items.length, duplicates: 0 };
+        }
     };
 
     const importOrders = async (newOrders: Order[]) => {
         if (!restaurantId) return 0;
+
+        // Optimistic update (JS CRUD)
+        setOrders(prev => [...newOrders, ...prev]);
+
         try {
             const flat: any[] = [];
             newOrders.forEach(o => {
@@ -280,13 +306,14 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
                     });
                 });
             });
-            const { error } = await supabase.from('orders').insert(flat);
-            if (!error) {
-                await fetchData();
-                return newOrders.length;
-            }
-        } catch (e) { console.error(e); }
-        return 0;
+            await supabase.from('orders').insert(flat);
+            // Non-blocking fetch in background
+            fetchData();
+            return newOrders.length;
+        } catch (e) {
+            console.warn("Supabase import failed, keeping local state for demo", e);
+            return newOrders.length;
+        }
     };
 
     const updateProfile = async (updates: Partial<RestaurantProfile>) => {

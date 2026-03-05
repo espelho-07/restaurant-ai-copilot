@@ -49,6 +49,15 @@ const RestaurantSetup = () => {
     location: profile.location || "",
     cuisine: profile.cuisine || "",
   });
+  const [formErrors, setFormErrors] = useState<{ name?: string; location?: string }>({});
+
+  const validateStep1 = () => {
+    const errors: { name?: string; location?: string } = {};
+    if (!form.name.trim()) errors.name = "Restaurant name is required.";
+    if (!form.location.trim()) errors.location = "Location is required.";
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   // ─── FILE HANDLERS ──────────────────────────────────────────────
 
@@ -211,18 +220,20 @@ const RestaurantSetup = () => {
 
             <div className="space-y-4">
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Restaurant Name</label>
+                <label className="text-xs font-medium text-muted-foreground">Restaurant Name <span className="text-destructive">*</span></label>
                 <div className="relative mt-1.5">
                   <Store className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Spice Garden" className="w-full rounded-xl border border-border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/20" />
+                  <input type="text" value={form.name} onChange={(e) => { setForm({ ...form, name: e.target.value }); if (e.target.value.trim()) setFormErrors(p => ({ ...p, name: undefined })); }} placeholder="e.g. Spice Garden" className={`w-full rounded-xl border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${formErrors.name ? 'border-destructive focus:ring-destructive/20' : 'border-border'}`} />
                 </div>
+                {formErrors.name && <p className="mt-1 text-[11px] text-destructive">{formErrors.name}</p>}
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Location</label>
+                <label className="text-xs font-medium text-muted-foreground">Location <span className="text-destructive">*</span></label>
                 <div className="relative mt-1.5">
                   <MapPin className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <input type="text" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="e.g. Koramangala, Bangalore" className="w-full rounded-xl border border-border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/20" />
+                  <input type="text" value={form.location} onChange={(e) => { setForm({ ...form, location: e.target.value }); if (e.target.value.trim()) setFormErrors(p => ({ ...p, location: undefined })); }} placeholder="e.g. Koramangala, Bangalore" className={`w-full rounded-xl border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${formErrors.location ? 'border-destructive focus:ring-destructive/20' : 'border-border'}`} />
                 </div>
+                {formErrors.location && <p className="mt-1 text-[11px] text-destructive">{formErrors.location}</p>}
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Cuisine Type</label>
@@ -260,7 +271,7 @@ const RestaurantSetup = () => {
               </div>
             </div>
 
-            <button onClick={() => setStep(2)} className="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:brightness-110">
+            <button onClick={() => { if (validateStep1()) setStep(2); }} className="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:brightness-110">
               Continue <ArrowRight className="h-4 w-4" />
             </button>
           </motion.div>
@@ -396,11 +407,10 @@ const RestaurantSetup = () => {
                   </a>
                 </div>
 
-                {/* Optional CSV for no-POS users too */}
                 <div className="glass-card p-5">
                   <div className="flex items-center gap-2 mb-3">
                     <Upload className="h-4 w-4 text-muted-foreground" />
-                    <h3 className="text-sm font-semibold text-muted-foreground">Or upload a CSV file</h3>
+                    <h3 className="text-sm font-semibold text-muted-foreground">Or upload an Excel or CSV file</h3>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div
@@ -409,7 +419,7 @@ const RestaurantSetup = () => {
                       className="relative flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-4 transition-colors hover:border-primary/40"
                     >
                       <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
-                      <p className="mt-1 text-xs font-medium">{menuFile ? menuFile.name : "Menu CSV"}</p>
+                      <p className="mt-1 text-[11px] font-medium text-center">{menuFile ? menuFile.name : "Menu Data"}</p>
                       <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "menu")} className="absolute inset-0 cursor-pointer opacity-0" />
                     </div>
                     <div
@@ -418,12 +428,12 @@ const RestaurantSetup = () => {
                       className="relative flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-4 transition-colors hover:border-primary/40"
                     >
                       <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
-                      <p className="mt-1 text-xs font-medium">{orderFile ? orderFile.name : "Order CSV"}</p>
+                      <p className="mt-1 text-[11px] font-medium text-center">{orderFile ? orderFile.name : "Order Data"}</p>
                       <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "order")} className="absolute inset-0 cursor-pointer opacity-0" />
                     </div>
                   </div>
-                  {menuParseResult && menuParseResult.count > 0 && <p className="mt-2 text-xs text-success">✓ {menuParseResult.count} menu items imported</p>}
-                  {orderParseResult && orderParseResult.count > 0 && <p className="mt-1 text-xs text-success">✓ {orderParseResult.count} orders imported</p>}
+                  {menuParseResult && menuParseResult.count > 0 && <p className="mt-2 text-xs text-success">✓ {menuParseResult.count} menu items extracted</p>}
+                  {orderParseResult && orderParseResult.count > 0 && <p className="mt-1 text-xs text-success">✓ {orderParseResult.count} orders extracted</p>}
                 </div>
               </motion.div>
             )}

@@ -5,7 +5,7 @@ import { Session, User } from "@supabase/supabase-js";
 // Authentication is bypassed. A fake demo user is injected everywhere.
 // To re-enable auth, restore the original AuthProvider from git history.
 
-const DEMO_USER_ID = "demo-user-00000000-0000-0000-0000-000000000001";
+const DEMO_USER_ID = "00000000-0000-0000-0000-000000000001";
 const DEMO_EMAIL = "test123@gmail.com";
 
 const demoUser: User = {
