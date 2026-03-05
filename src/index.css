@@ -152,6 +152,9 @@
   .tag-low-margin {
     @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-destructive/10 text-destructive;
   }
+  .tag-new-item {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/10 text-primary;
+  }
 }
 
 @layer utilities {

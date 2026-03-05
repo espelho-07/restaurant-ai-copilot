@@ -1,10 +1,12 @@
 import { Link, useLocation } from "react-router-dom";
-import { BarChart3, Brain, Mic, Utensils, Layers, FileText, Home } from "lucide-react";
+import { BarChart3, Brain, Mic, Utensils, Layers, FileText, Home, Settings, ShoppingCart } from "lucide-react";
 
 const navItems = [
   { label: "Home", path: "/", icon: Home },
+  { label: "Setup", path: "/setup", icon: Settings },
   { label: "Command Center", path: "/dashboard", icon: BarChart3 },
   { label: "Menu Intelligence", path: "/menu", icon: Utensils },
+  { label: "POS Orders", path: "/orders", icon: ShoppingCart },
   { label: "Combo Engine", path: "/combos", icon: Layers },
   { label: "Voice Copilot", path: "/voice", icon: Mic },
   { label: "Insights", path: "/insights", icon: FileText },

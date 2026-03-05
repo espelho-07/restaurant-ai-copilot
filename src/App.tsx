@@ -3,34 +3,42 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { RestaurantDataProvider } from "@/lib/restaurantData";
 import Index from "./pages/Index";
 import Dashboard from "./pages/Dashboard";
 import MenuIntelligence from "./pages/MenuIntelligence";
 import ComboEngine from "./pages/ComboEngine";
 import VoiceCopilot from "./pages/VoiceCopilot";
 import Insights from "./pages/Insights";
+import RestaurantSetup from "./pages/RestaurantSetup";
+import OrdersSimulation from "./pages/OrdersSimulation";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/menu" element={<MenuIntelligence />} />
-          <Route path="/combos" element={<ComboEngine />} />
-          <Route path="/voice" element={<VoiceCopilot />} />
-          <Route path="/insights" element={<Insights />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
-    </TooltipProvider>
+    <RestaurantDataProvider>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<Index />} />
+            <Route path="/setup" element={<RestaurantSetup />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/menu" element={<MenuIntelligence />} />
+            <Route path="/orders" element={<OrdersSimulation />} />
+            <Route path="/combos" element={<ComboEngine />} />
+            <Route path="/voice" element={<VoiceCopilot />} />
+            <Route path="/insights" element={<Insights />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </TooltipProvider>
+    </RestaurantDataProvider>
   </QueryClientProvider>
 );
 
 export default App;
+
