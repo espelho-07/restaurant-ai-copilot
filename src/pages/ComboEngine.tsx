@@ -1,9 +1,10 @@
 import { DashboardNav } from "@/components/DashboardNav";
 import { motion } from "framer-motion";
-import { Sparkles, TrendingUp, Plus, Database, Shield, ChevronDown, ChevronRight } from "lucide-react";
+import { Sparkles, TrendingUp, Plus, Database, Shield, ChevronDown, ChevronRight, Layers } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useRestaurantData } from "@/lib/restaurantData";
 import { generateComboRecommendations } from "@/lib/aiEngine";
+import { toast } from "sonner";
 
 const impactBadge = (level: string) => {
   const cls = level === "HIGH" ? "bg-destructive/10 text-destructive" : level === "MEDIUM" ? "bg-accent/10 text-accent" : "bg-secondary text-muted-foreground";
@@ -11,18 +12,43 @@ const impactBadge = (level: string) => {
 };
 
 const ComboEngine = () => {
-  const { menuItems, orders } = useRestaurantData();
+  const { menuItems, orders, addMenuItem } = useRestaurantData();
   const [expandedCombo, setExpandedCombo] = useState<number | null>(null);
+  const [createdCombos, setCreatedCombos] = useState<number[]>([]);
 
   const combos = useMemo(
     () => generateComboRecommendations(menuItems, orders),
     [menuItems, orders]
   );
 
+  const handleCreateCombo = async (combo: any, index: number) => {
+    if (createdCombos.includes(index)) return;
+
+    try {
+      const comboName = combo.items.map((item: any) => item.name).join(" + ") + " Combo";
+      const comboCost = combo.items.reduce((sum: number, item: any) => sum + item.cost, 0);
+
+      await addMenuItem({
+        name: comboName,
+        price: combo.suggestedPrice,
+        cost: comboCost,
+        category: "Combos",
+        aliases: []
+      } as any);
+
+      setCreatedCombos(prev => [...prev, index]);
+      toast.success(`${comboName} added to menu!`, {
+        description: `Price: ₹${combo.suggestedPrice} | Estimated Margin: ${Math.round(((combo.suggestedPrice - comboCost) / combo.suggestedPrice) * 100)}%`
+      });
+    } catch (error) {
+      toast.error("Failed to create combo");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <DashboardNav />
-      <div className="mx-auto max-w-7xl px-6 py-8">
+      <div className="mx-auto max-w-7xl px-6 py-8 pb-32">
         <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}>
           <h1 className="font-display text-2xl font-bold">Combo Recommendation Engine</h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -41,7 +67,10 @@ const ComboEngine = () => {
 
         <div className="mt-8 grid gap-6 sm:grid-cols-2">
           {combos.length === 0 ? (
-            <div className="col-span-2 py-12 text-center text-muted-foreground">Upload menu and order data to generate combo recommendations.</div>
+            <div className="col-span-2 py-12 text-center text-muted-foreground">
+              <Layers className="h-10 w-10 mx-auto opacity-20 mb-3" />
+              Upload menu and simulate order data to generate AI combo recommendations.
+            </div>
           ) : combos.map((combo, i) => (
             <motion.div
               key={i}
@@ -144,11 +173,18 @@ const ComboEngine = () => {
                 )}
 
                 <div className="mt-4 flex gap-2">
-                  <button className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:brightness-110">
-                    <Plus className="h-3 w-3" /> Create Combo
+                  <button
+                    onClick={() => handleCreateCombo(combo, i)}
+                    disabled={createdCombos.includes(i)}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100 transition-all"
+                  >
+                    <Plus className="h-3 w-3" /> {createdCombos.includes(i) ? "Combo Created" : "Create Combo"}
                   </button>
-                  <button className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-secondary">
-                    View Analysis
+                  <button
+                    onClick={() => setExpandedCombo(expandedCombo === i ? null : i)}
+                    className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-all"
+                  >
+                    {expandedCombo === i ? "Hide Analysis" : "View Analysis"}
                   </button>
                 </div>
               </div>

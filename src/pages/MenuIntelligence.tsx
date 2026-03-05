@@ -12,9 +12,11 @@ import {
   ArrowRight,
   Shield,
   Activity,
-  Globe
+  Globe,
+  Trash2
 } from "lucide-react";
 import { useState, useMemo } from "react";
+import { toast } from "sonner";
 import { useRestaurantData } from "@/lib/restaurantData";
 import {
   calculateMargin,
@@ -45,8 +47,8 @@ const impactBadge = (level: string) => {
 };
 
 const MenuIntelligence = () => {
-  const { menuItems, orders, commissions, addMenuItem } = useRestaurantData();
-  const [expanded, setExpanded] = useState<number | null>(null);
+  const { menuItems, orders, commissions, addMenuItem, removeMenuItem } = useRestaurantData();
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showPricing, setShowPricing] = useState(false);
   const [expandedPriceRec, setExpandedPriceRec] = useState<number | null>(null);
@@ -54,6 +56,7 @@ const MenuIntelligence = () => {
   const [searchQuery, setSearchQuery] = useState("");
 
   const [newItem, setNewItem] = useState({ name: "", price: "", cost: "", category: "" });
+  const [addErrors, setAddErrors] = useState<{ name?: string; price?: string; cost?: string; category?: string }>({});
 
   const priceRecs = useMemo(() => generatePriceRecommendations(menuItems, orders, commissions), [menuItems, orders, commissions]);
 
@@ -78,12 +81,34 @@ const MenuIntelligence = () => {
   }, [menuItems, orders, priceRecs, avgCommission]);
 
   const handleAddItem = () => {
+    const errors: typeof addErrors = {};
+    if (!newItem.name.trim()) errors.name = "Item name is required";
     const price = Number(newItem.price);
     const cost = Number(newItem.cost);
-    if (!newItem.name || !price || !cost) return;
-    addMenuItem({ name: newItem.name, price, cost, category: newItem.category || "Other" });
+    if (!newItem.price || price <= 0) errors.price = "Enter a valid selling price";
+    if (!newItem.cost || cost < 0) errors.cost = "Enter a valid food cost";
+    if (!newItem.category) errors.category = "Select a category";
+    if (price > 0 && cost >= price) errors.cost = "Cost must be less than price";
+    if (Object.keys(errors).length > 0) { setAddErrors(errors); return; }
+    setAddErrors({});
+    addMenuItem({ name: newItem.name.trim(), price, cost, category: newItem.category });
     setNewItem({ name: "", price: "", cost: "", category: "" });
     setShowAddForm(false);
+    toast.success(`${newItem.name.trim()} added to menu!`);
+  };
+
+  // Keyboard nav: Enter moves to next field, Escape closes form
+  const handleFieldKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>, nextFieldId?: string) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (nextFieldId) {
+        const next = document.getElementById(nextFieldId);
+        if (next) next.focus();
+      } else {
+        handleAddItem();
+      }
+    }
+    if (e.key === "Escape") setShowAddForm(false);
   };
 
   const filteredItems = classifiedItems
@@ -96,6 +121,27 @@ const MenuIntelligence = () => {
       return true;
     })
     .filter((item) => searchQuery ? item.name.toLowerCase().includes(searchQuery.toLowerCase()) : true);
+
+  const groupedItems = useMemo(() => {
+    const groups = filteredItems.reduce((acc, item) => {
+      const cat = item.category || "Uncategorized";
+      if (!acc[cat]) acc[cat] = [];
+      acc[cat].push(item);
+      return acc;
+    }, {} as Record<string, typeof filteredItems>);
+
+    // Sort categories explicitly: Combos first, then alphabetical
+    return Object.keys(groups)
+      .sort((a, b) => {
+        if (a === "Combos") return -1;
+        if (b === "Combos") return 1;
+        return a.localeCompare(b);
+      })
+      .reduce((acc, key) => {
+        acc[key] = groups[key];
+        return acc;
+      }, {} as Record<string, typeof filteredItems>);
+  }, [filteredItems]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -124,10 +170,26 @@ const MenuIntelligence = () => {
           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="mt-6 glass-card p-5">
             <div className="flex items-center gap-2 mb-4"><Plus className="h-4 w-4 text-primary" /><h3 className="font-display text-sm font-semibold">Add New Menu Item</h3></div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div><label className="text-xs font-medium text-muted-foreground">Item Name</label><input type="text" value={newItem.name} onChange={(e) => setNewItem({ ...newItem, name: e.target.value })} placeholder="e.g. Paneer Butter Masala" className="mt-1.5 w-full rounded-xl border border-border bg-card py-2.5 px-4 text-sm outline-none focus:ring-2 focus:ring-primary/20" /></div>
-              <div><label className="text-xs font-medium text-muted-foreground">Selling Price (₹)</label><input type="number" value={newItem.price} onChange={(e) => setNewItem({ ...newItem, price: e.target.value })} placeholder="e.g. 280" className="mt-1.5 w-full rounded-xl border border-border bg-card py-2.5 px-4 text-sm outline-none focus:ring-2 focus:ring-primary/20" /></div>
-              <div><label className="text-xs font-medium text-muted-foreground">Food Cost (₹)</label><input type="number" value={newItem.cost} onChange={(e) => setNewItem({ ...newItem, cost: e.target.value })} placeholder="e.g. 100" className="mt-1.5 w-full rounded-xl border border-border bg-card py-2.5 px-4 text-sm outline-none focus:ring-2 focus:ring-primary/20" /></div>
-              <div><label className="text-xs font-medium text-muted-foreground">Category</label><select value={newItem.category} onChange={(e) => setNewItem({ ...newItem, category: e.target.value })} className="mt-1.5 w-full appearance-none rounded-xl border border-border bg-card py-2.5 px-4 text-sm outline-none focus:ring-2 focus:ring-primary/20"><option value="">Select category</option>{categoryOptions.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Item Name *</label>
+                <input id="add-name" type="text" value={newItem.name} onChange={(e) => { setNewItem({ ...newItem, name: e.target.value }); if (e.target.value.trim()) setAddErrors(p => ({ ...p, name: undefined })); }} onKeyDown={(e) => handleFieldKeyDown(e, "add-price")} placeholder="e.g. Paneer Butter Masala" className={`mt-1.5 w-full rounded-xl border bg-card py-2.5 px-4 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${addErrors.name ? 'border-destructive' : 'border-border'}`} autoFocus />
+                {addErrors.name && <p className="mt-1 text-[11px] text-destructive font-medium">{addErrors.name}</p>}
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Selling Price (₹) *</label>
+                <input id="add-price" type="number" min="1" value={newItem.price} onChange={(e) => { setNewItem({ ...newItem, price: e.target.value }); if (Number(e.target.value) > 0) setAddErrors(p => ({ ...p, price: undefined })); }} onKeyDown={(e) => handleFieldKeyDown(e, "add-cost")} placeholder="e.g. 280" className={`mt-1.5 w-full rounded-xl border bg-card py-2.5 px-4 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${addErrors.price ? 'border-destructive' : 'border-border'}`} />
+                {addErrors.price && <p className="mt-1 text-[11px] text-destructive font-medium">{addErrors.price}</p>}
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Food Cost (₹) *</label>
+                <input id="add-cost" type="number" min="0" value={newItem.cost} onChange={(e) => { setNewItem({ ...newItem, cost: e.target.value }); if (Number(e.target.value) >= 0) setAddErrors(p => ({ ...p, cost: undefined })); }} onKeyDown={(e) => handleFieldKeyDown(e, "add-category")} placeholder="e.g. 100" className={`mt-1.5 w-full rounded-xl border bg-card py-2.5 px-4 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${addErrors.cost ? 'border-destructive' : 'border-border'}`} />
+                {addErrors.cost && <p className="mt-1 text-[11px] text-destructive font-medium">{addErrors.cost}</p>}
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Category *</label>
+                <select id="add-category" value={newItem.category} onChange={(e) => { setNewItem({ ...newItem, category: e.target.value }); if (e.target.value) setAddErrors(p => ({ ...p, category: undefined })); }} onKeyDown={(e) => handleFieldKeyDown(e)} className={`mt-1.5 w-full appearance-none rounded-xl border bg-card py-2.5 px-4 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${addErrors.category ? 'border-destructive' : 'border-border'}`}><option value="">Select category</option>{categoryOptions.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+                {addErrors.category && <p className="mt-1 text-[11px] text-destructive font-medium">{addErrors.category}</p>}
+              </div>
             </div>
             {newItem.price && newItem.cost && Number(newItem.price) > 0 && (
               <div className="mt-3 text-xs text-muted-foreground">Estimated margin: <span className={`font-semibold ${((Number(newItem.price) - Number(newItem.cost)) / Number(newItem.price)) * 100 > 50 ? "text-success" : "text-destructive"}`}>{(((Number(newItem.price) - Number(newItem.cost)) / Number(newItem.price)) * 100).toFixed(1)}%</span></div>
@@ -238,73 +300,121 @@ const MenuIntelligence = () => {
               </tr>
             </thead>
             <tbody>
-              {filteredItems.map((item, i) => (
-                <optgroup key={item.id} className="contents">
-                  <tr onClick={() => setExpanded(expanded === i ? null : i)} className="cursor-pointer border-b border-border/30 transition-colors hover:bg-secondary/30">
-                    <td className="px-5 py-3.5 text-sm font-medium">{item.name}</td>
-                    <td className="px-5 py-3.5 text-sm">₹{item.price}</td>
-                    <td className="px-5 py-3.5 text-sm text-muted-foreground">₹{item.cost}</td>
-                    <td className="px-5 py-3.5 text-sm font-semibold">
-                      <div className="flex items-center gap-2">
-                        <span className={item.margin > 50 ? "text-success" : "text-destructive"}>{item.margin.toFixed(0)}%</span>
-                        <span className="text-muted-foreground/30">|</span>
-                        <span className={`text-xs ${item.onlineMargin > 50 ? "text-success/70" : "text-destructive/70"}`}>{item.onlineMargin.toFixed(0)}%</span>
-                      </div>
+              {Object.entries(groupedItems).map(([category, items]) => (
+                <optgroup key={category} className="contents">
+                  <tr>
+                    <td colSpan={7} className="bg-secondary/60 px-5 py-3 text-xs font-bold uppercase tracking-widest text-foreground shadow-sm border-b border-border/80">
+                      {category} <span className="text-muted-foreground font-medium lowercase tracking-normal ml-2">({items.length} items)</span>
                     </td>
-                    <td className="px-5 py-3.5 text-sm">{item.orderCount}</td>
-                    <td className="px-5 py-3.5"><span className={tagClass[item.tag]}>{tagLabel[item.tag]}</span></td>
-                    <td className="px-5 py-3.5">{expanded === i ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}</td>
                   </tr>
-                  {expanded === i && (
-                    <tr>
-                      <td colSpan={7} className="bg-primary/[0.03] px-5 py-4 border-b border-border/30">
-                        <div className="flex items-start gap-2">
-                          <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <p className="text-xs font-semibold text-accent">AI Recommendation</p>
-                              {item.priceRec && (
-                                <>
-                                  {impactBadge(item.priceRec.impactLevel)}
-                                  <div className="flex items-center gap-1"><Shield className="h-2.5 w-2.5 text-muted-foreground" /><span className={`text-[10px] font-bold ${item.priceRec.confidence >= 75 ? "text-success" : item.priceRec.confidence >= 50 ? "text-accent" : "text-muted-foreground"}`}>{item.priceRec.confidence}% confidence</span></div>
-                                </>
-                              )}
+                  {items.map((item) => {
+                    const isExpanded = expanded === item.id.toString();
+                    return (
+                      <optgroup key={item.id} className="contents group">
+                        <tr onClick={() => setExpanded(isExpanded ? null : item.id.toString())} className="cursor-pointer border-b border-border/30 transition-colors hover:bg-secondary/30 relative">
+                          <td className="px-5 py-3.5 text-sm font-medium">{item.name}</td>
+                          <td className="px-5 py-3.5 text-sm">₹{item.price}</td>
+                          <td className="px-5 py-3.5 text-sm text-muted-foreground">₹{item.cost}</td>
+                          <td className="px-5 py-3.5 text-sm font-semibold">
+                            <div className="flex items-center gap-2">
+                              <span className={item.margin > 50 ? "text-success" : "text-destructive"}>{item.margin.toFixed(0)}%</span>
+                              <span className="text-muted-foreground/30">|</span>
+                              <span className={`text-xs ${item.onlineMargin > 50 ? "text-success/70" : "text-destructive/70"}`}>{item.onlineMargin.toFixed(0)}%</span>
                             </div>
-                            <p className="mt-1 text-sm text-muted-foreground">{item.recommendation}</p>
-                            {item.priceRec && (item.priceRec.suggestedPrice !== item.priceRec.currentPrice || (item.priceRec.suggestedOnlinePrice && item.priceRec.suggestedOnlinePrice !== item.priceRec.currentPrice)) && (
-                              <div className="mt-3 flex items-center gap-3 flex-wrap">
-                                {item.priceRec.suggestedPrice !== item.priceRec.currentPrice && (
-                                  <div className="inline-flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-1.5">
-                                    <span className="text-xs text-muted-foreground">Suggested Offline:</span>
-                                    <span className="text-xs line-through text-muted-foreground">₹{item.priceRec.currentPrice}</span>
-                                    <ArrowRight className="h-3 w-3 text-primary" />
-                                    <span className="text-xs font-bold text-primary">₹{item.priceRec.suggestedPrice}</span>
+                          </td>
+                          <td className="px-5 py-3.5 text-sm">{item.orderCount}</td>
+                          <td className="px-5 py-3.5"><span className={tagClass[item.tag]}>{tagLabel[item.tag]}</span></td>
+                          <td className="px-5 py-3.5">
+                            <div className="flex items-center gap-3 justify-end">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); removeMenuItem(item.id); }}
+                                className="p-1.5 text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 rounded-md transition-all opacity-0 group-hover:opacity-100"
+                                title="Delete Item"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                              {isExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                            </div>
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr>
+                            <td colSpan={7} className="bg-primary/[0.02] px-6 py-5 border-b border-border/40 shadow-inner">
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                {/* Left Side: General Analysis */}
+                                <div>
+                                  <div className="flex items-center gap-2 mb-3">
+                                    <Activity className="h-4 w-4 text-primary" />
+                                    <h4 className="font-display text-sm font-semibold text-foreground">Item Performance</h4>
                                   </div>
-                                )}
-                                {item.priceRec.suggestedOnlinePrice && item.priceRec.suggestedOnlinePrice !== item.priceRec.currentPrice && (
-                                  <div className="inline-flex items-center gap-2 rounded-lg bg-accent/10 px-3 py-1.5">
-                                    <Globe className="h-3 w-3 text-accent" />
-                                    <span className="text-xs text-muted-foreground">Online Price:</span>
-                                    <span className="text-xs line-through text-muted-foreground">₹{item.priceRec.currentPrice}</span>
-                                    <ArrowRight className="h-3 w-3 text-accent" />
-                                    <span className="text-xs font-bold text-accent">₹{item.priceRec.suggestedOnlinePrice}</span>
+                                  <div className="grid grid-cols-2 gap-3 mb-4">
+                                    <div className="rounded-xl border border-border/50 bg-background/50 p-3">
+                                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Sales Volume</p>
+                                      <p className="font-display text-lg font-bold">{item.orderCount} <span className="text-xs font-medium text-muted-foreground">orders</span></p>
+                                    </div>
+                                    <div className="rounded-xl border border-border/50 bg-background/50 p-3">
+                                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Revenue Generated</p>
+                                      <p className="font-display text-lg font-bold">₹{(item.price * item.orderCount).toLocaleString()}</p>
+                                    </div>
                                   </div>
-                                )}
-                                {item.priceRec.estimatedMonthlyImpact > 0 && (
-                                  <span className="text-xs font-semibold text-success">+₹{item.priceRec.estimatedMonthlyImpact}/mo</span>
-                                )}
+                                  <p className="text-sm text-muted-foreground leading-relaxed">
+                                    <span className="font-semibold text-foreground">{item.name}</span> currently has an offline profit margin of <span className="font-bold text-foreground">{item.margin.toFixed(1)}%</span> and an online margin of <span className="font-bold text-foreground">{item.onlineMargin.toFixed(1)}%</span> after commissions.
+                                  </p>
+                                </div>
+
+                                {/* Right Side: AI Insights */}
+                                <div className="rounded-xl border border-border/40 bg-background p-4 shadow-sm relative overflow-hidden">
+                                  <div className="absolute top-0 right-0 w-32 h-32 bg-accent/5 rounded-full blur-2xl -mr-10 -mt-10 pointer-events-none"></div>
+                                  <div className="relative">
+                                    <div className="flex items-center gap-2 mb-3">
+                                      <Sparkles className="h-4 w-4 text-accent" />
+                                      <h4 className="font-display text-sm font-semibold text-accent">AI Recommendation</h4>
+                                      {item.priceRec && (
+                                        <div className="ml-auto flex items-center gap-2">
+                                          {impactBadge(item.priceRec.impactLevel)}
+                                          <div className="flex items-center gap-1"><Shield className="h-3 w-3 text-muted-foreground" /><span className={`text-[10px] font-bold ${item.priceRec.confidence >= 75 ? "text-success" : item.priceRec.confidence >= 50 ? "text-accent" : "text-muted-foreground"}`}>{item.priceRec.confidence}%</span></div>
+                                        </div>
+                                      )}
+                                    </div>
+                                    <p className="text-sm text-muted-foreground leading-relaxed font-medium">{item.recommendation}</p>
+                                    {item.priceRec && (item.priceRec.suggestedPrice !== item.priceRec.currentPrice || (item.priceRec.suggestedOnlinePrice && item.priceRec.suggestedOnlinePrice !== item.priceRec.currentPrice)) && (
+                                      <div className="mt-3 flex items-center gap-3 flex-wrap">
+                                        {item.priceRec.suggestedPrice !== item.priceRec.currentPrice && (
+                                          <div className="inline-flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-1.5">
+                                            <span className="text-xs text-muted-foreground">Suggested Offline:</span>
+                                            <span className="text-xs line-through text-muted-foreground">₹{item.priceRec.currentPrice}</span>
+                                            <ArrowRight className="h-3 w-3 text-primary" />
+                                            <span className="text-xs font-bold text-primary">₹{item.priceRec.suggestedPrice}</span>
+                                          </div>
+                                        )}
+                                        {item.priceRec.suggestedOnlinePrice && item.priceRec.suggestedOnlinePrice !== item.priceRec.currentPrice && (
+                                          <div className="inline-flex items-center gap-2 rounded-lg bg-accent/10 px-3 py-1.5">
+                                            <Globe className="h-3 w-3 text-accent" />
+                                            <span className="text-xs text-muted-foreground">Online Price:</span>
+                                            <span className="text-xs line-through text-muted-foreground">₹{item.priceRec.currentPrice}</span>
+                                            <ArrowRight className="h-3 w-3 text-accent" />
+                                            <span className="text-xs font-bold text-accent">₹{item.priceRec.suggestedOnlinePrice}</span>
+                                          </div>
+                                        )}
+                                        {item.priceRec.estimatedMonthlyImpact > 0 && (
+                                          <span className="text-xs font-semibold text-success">+₹{item.priceRec.estimatedMonthlyImpact}/mo</span>
+                                        )}
+                                      </div>
+                                    )}
+                                    {item.priceRec && item.priceRec.impactedMetrics.length > 0 && (
+                                      <div className="mt-4 flex flex-wrap gap-1.5">
+                                        {item.priceRec.impactedMetrics.map((m) => <span key={m} className="rounded-md bg-primary/5 border border-primary/10 px-2 py-1 text-[10px] font-bold text-primary">{m}</span>)}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
                               </div>
-                            )}
-                            {item.priceRec && item.priceRec.impactedMetrics.length > 0 && (
-                              <div className="mt-3 flex flex-wrap gap-1">
-                                {item.priceRec.impactedMetrics.map((m) => <span key={m} className="rounded-full bg-primary/5 px-2 py-0.5 text-[9px] font-medium text-primary">{m}</span>)}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
+                            </td>
+                          </tr>
+                        )}
+                      </optgroup>
+                    );
+                  })}
                 </optgroup>
               ))}
             </tbody>

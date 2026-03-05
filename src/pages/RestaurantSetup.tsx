@@ -15,6 +15,7 @@ import {
   ShoppingCart,
   AlertCircle,
   Globe,
+  Trash2,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRestaurantData } from "@/lib/restaurantData";
@@ -27,7 +28,7 @@ const cuisineTypes = [
 ];
 
 const RestaurantSetup = () => {
-  const { menuItems, importMenuItems, importOrders, updateProfile, profile, commissions, updateCommission } = useRestaurantData();
+  const { menuItems, orders, importMenuItems, importOrders, addMenuItem, removeMenuItem, addOrder, updateProfile, profile, commissions, updateCommission } = useRestaurantData();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -59,6 +60,17 @@ const RestaurantSetup = () => {
   });
   const [formErrors, setFormErrors] = useState<{ name?: string; location?: string }>({});
 
+  // No-POS inline form state
+  const [manualItem, setManualItem] = useState({ name: "", price: "", cost: "", category: "" });
+  const [manualItemErrors, setManualItemErrors] = useState<Record<string, string>>({});
+  const [manualOrder, setManualOrder] = useState<{ itemId: string; qty: string; channel: string }>({ itemId: "", qty: "1", channel: "OFFLINE" });
+
+  const setupCategoryOptions = [
+    "Main Course", "Starters", "Breads", "Rice", "Beverages", "Desserts",
+    "Fast Food", "Pizza", "Burger", "Sandwich", "Biryani", "Chinese",
+    "Snacks", "Fries", "Shakes", "Ice Cream", "Sweets", "Other",
+  ];
+
   const validateStep1 = () => {
     const errors: { name?: string; location?: string } = {};
     if (!form.name.trim()) errors.name = "Restaurant name is required.";
@@ -70,51 +82,77 @@ const RestaurantSetup = () => {
   // ─── FILE HANDLERS ──────────────────────────────────────────────
 
   const handleMenuUpload = useCallback(async (file: File) => {
-    setMenuFile(file);
-    const result = await parseMenuCSV(file);
-
-    if (result.items.length === 0) {
-      setMenuParseResult({ count: 0, errors: result.errors.length > 0 ? result.errors : ["No valid menu items found in file."] });
-      toast.error("Could not parse menu file");
+    const validExts = [".csv", ".xlsx", ".xls"];
+    const ext = file.name.substring(file.name.lastIndexOf(".")).toLowerCase();
+    if (!validExts.includes(ext)) {
+      toast.error("Invalid file format", { description: `Expected CSV or Excel file, got "${ext}". Please upload a .csv, .xlsx, or .xls file.` });
       return;
     }
+    try {
+      setMenuFile(file);
+      const result = await parseMenuCSV(file);
 
-    const { added, duplicates } = await importMenuItems(result.items);
-    setMenuParseResult({
-      count: added,
-      errors: [
-        ...result.errors,
-        ...(duplicates > 0 ? [`${duplicates} duplicate items skipped.`] : []),
-      ],
-    });
-    toast.success(`${added} menu items imported!`, {
-      description: duplicates > 0 ? `${duplicates} duplicates skipped` : undefined,
-    });
+      if (result.items.length === 0) {
+        setMenuParseResult({ count: 0, errors: result.errors.length > 0 ? result.errors : ["No valid menu items found. Make sure your file has columns: Item Name, Selling Price, Food Cost, Category."] });
+        toast.error("Could not parse menu file", { description: "Check that your file has the required columns." });
+        return;
+      }
+
+      const { added, duplicates } = await importMenuItems(result.items);
+      setMenuParseResult({
+        count: added,
+        errors: [
+          ...result.errors,
+          ...(duplicates > 0 ? [`${duplicates} duplicate items skipped.`] : []),
+        ],
+      });
+      toast.success(`${added} menu items imported!`, {
+        description: duplicates > 0 ? `${duplicates} duplicates skipped` : undefined,
+      });
+    } catch (err: any) {
+      toast.error("Failed to read file", { description: err?.message || "The file might be corrupted or in an unsupported format. Try re-saving as CSV." });
+      setMenuFile(null);
+    }
   }, [importMenuItems]);
 
   const handleOrderUpload = useCallback(async (file: File) => {
-    setOrderFile(file);
-    const result = await parseOrderCSV(file, menuItems);
-
-    if (result.orders.length === 0) {
-      setOrderParseResult({
-        count: 0,
-        errors: result.errors.length > 0 ? result.errors : ["No valid orders found. Make sure item names match your menu."],
-        unmatched: result.stats.unmatchedItems,
-      });
-      toast.error("Could not parse order file");
+    const validExts = [".csv", ".xlsx", ".xls"];
+    const ext = file.name.substring(file.name.lastIndexOf(".")).toLowerCase();
+    if (!validExts.includes(ext)) {
+      toast.error("Invalid file format", { description: `Expected CSV or Excel file, got "${ext}". Please upload a .csv, .xlsx, or .xls file.` });
       return;
     }
+    if (menuItems.length === 0) {
+      toast.error("Add menu items first", { description: "Order data needs menu items to match against. Add your menu items before uploading orders." });
+      return;
+    }
+    try {
+      setOrderFile(file);
+      const result = await parseOrderCSV(file, menuItems);
 
-    const count = await importOrders(result.orders);
-    setOrderParseResult({
-      count,
-      errors: result.errors,
-      unmatched: result.stats.unmatchedItems,
-    });
-    toast.success(`${count} orders imported!`, {
-      description: `${result.stats.matchedItems} item matches across ${result.stats.totalRows} rows`,
-    });
+      if (result.orders.length === 0) {
+        setOrderParseResult({
+          count: 0,
+          errors: result.errors.length > 0 ? result.errors : ["No valid orders found. Make sure item names match your menu."],
+          unmatched: result.stats.unmatchedItems,
+        });
+        toast.error("Could not parse order file", { description: "Item names in the file didn't match any menu items." });
+        return;
+      }
+
+      const count = await importOrders(result.orders);
+      setOrderParseResult({
+        count,
+        errors: result.errors,
+        unmatched: result.stats.unmatchedItems,
+      });
+      toast.success(`${count} orders imported!`, {
+        description: `${result.stats.matchedItems} item matches across ${result.stats.totalRows} rows`,
+      });
+    } catch (err: any) {
+      toast.error("Failed to read file", { description: err?.message || "The file might be corrupted. Try re-saving as CSV." });
+      setOrderFile(null);
+    }
   }, [menuItems, importOrders]);
 
   const handleFileDrop = useCallback((e: React.DragEvent, type: "menu" | "order") => {
@@ -231,7 +269,7 @@ const RestaurantSetup = () => {
                 <label className="text-xs font-medium text-muted-foreground">Restaurant Name <span className="text-destructive">*</span></label>
                 <div className="relative mt-1.5">
                   <Store className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <input type="text" value={form.name} onChange={(e) => { setForm({ ...form, name: e.target.value }); if (e.target.value.trim()) setFormErrors(p => ({ ...p, name: undefined })); }} placeholder="e.g. Spice Garden" className={`w-full rounded-xl border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${formErrors.name ? 'border-destructive focus:ring-destructive/20' : 'border-border'}`} />
+                  <input id="setup-name" type="text" value={form.name} onChange={(e) => { setForm({ ...form, name: e.target.value }); if (e.target.value.trim()) setFormErrors(p => ({ ...p, name: undefined })); }} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("setup-location")?.focus(); } }} placeholder="e.g. Spice Garden" className={`w-full rounded-xl border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${formErrors.name ? 'border-destructive focus:ring-destructive/20' : 'border-border'}`} />
                 </div>
                 {formErrors.name && <p className="mt-1 text-[11px] text-destructive">{formErrors.name}</p>}
               </div>
@@ -239,7 +277,7 @@ const RestaurantSetup = () => {
                 <label className="text-xs font-medium text-muted-foreground">Location <span className="text-destructive">*</span></label>
                 <div className="relative mt-1.5">
                   <MapPin className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <input type="text" value={form.location} onChange={(e) => { setForm({ ...form, location: e.target.value }); if (e.target.value.trim()) setFormErrors(p => ({ ...p, location: undefined })); }} placeholder="e.g. Koramangala, Bangalore" className={`w-full rounded-xl border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${formErrors.location ? 'border-destructive focus:ring-destructive/20' : 'border-border'}`} />
+                  <input id="setup-location" type="text" value={form.location} onChange={(e) => { setForm({ ...form, location: e.target.value }); if (e.target.value.trim()) setFormErrors(p => ({ ...p, location: undefined })); }} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("setup-cuisine")?.focus(); } }} placeholder="e.g. Koramangala, Bangalore" className={`w-full rounded-xl border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${formErrors.location ? 'border-destructive focus:ring-destructive/20' : 'border-border'}`} />
                 </div>
                 {formErrors.location && <p className="mt-1 text-[11px] text-destructive">{formErrors.location}</p>}
               </div>
@@ -247,7 +285,7 @@ const RestaurantSetup = () => {
                 <label className="text-xs font-medium text-muted-foreground">Cuisine Type</label>
                 <div className="relative mt-1.5">
                   <UtensilsCrossed className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <select value={form.cuisine} onChange={(e) => setForm({ ...form, cuisine: e.target.value })} className="w-full appearance-none rounded-xl border border-border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/20">
+                  <select id="setup-cuisine" value={form.cuisine} onChange={(e) => setForm({ ...form, cuisine: e.target.value })} className="w-full appearance-none rounded-xl border border-border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/20">
                     <option value="">Select cuisine type</option>
                     {cuisineTypes.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
@@ -388,38 +426,151 @@ const RestaurantSetup = () => {
               </motion.div>
             )}
 
-            {/* NO PATH — Manual Entry */}
+            {/* NO PATH — Manual Entry (Enhanced) */}
             {usesPOS === false && (
-              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="space-y-4">
+              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="space-y-5">
                 <div className="insight-card">
                   <div className="flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-accent" /><span className="text-xs font-semibold text-accent">No POS? No problem.</span></div>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">You can add your menu items manually and use our POS Simulation to generate order data. The AI engine will analyze everything the same way.</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Add your menu items and sales data right here. You can also upload an Excel/CSV file and our AI will auto-detect menu and order data.</p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <a href="/menu" className="glass-card-hover p-5 flex flex-col items-center gap-3 text-center">
-                    <PlusCircle className="h-8 w-8 text-primary" />
+                {/* ── Inline Add Menu Item ── */}
+                <div className="glass-card p-5">
+                  <div className="flex items-center gap-2 mb-4">
+                    <PlusCircle className="h-4 w-4 text-primary" />
+                    <h3 className="text-sm font-semibold">Add Menu Items</h3>
+                    {menuItems.length > 0 && <span className="ml-auto rounded-full bg-success/10 px-2.5 py-0.5 text-[10px] font-bold text-success">{menuItems.length} added</span>}
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <div>
-                      <p className="text-sm font-semibold">Add Menu Items</p>
-                      <p className="text-xs text-muted-foreground">Manually enter your menu</p>
+                      <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Item Name *</label>
+                      <input id="setup-item-name" type="text" value={manualItem.name} onChange={(e) => { setManualItem({ ...manualItem, name: e.target.value }); if (e.target.value.trim()) setManualItemErrors(p => ({ ...p, name: "" })); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("setup-item-price")?.focus(); } }}
+                        placeholder="e.g. Butter Chicken" className={`mt-1 w-full rounded-xl border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${manualItemErrors.name ? 'border-destructive' : 'border-border'}`} />
+                      {manualItemErrors.name && <p className="mt-0.5 text-[10px] text-destructive">{manualItemErrors.name}</p>}
                     </div>
-                    <span className="text-xs font-medium text-primary">{menuItems.length} items in menu →</span>
-                  </a>
-                  <a href="/orders" className="glass-card-hover p-5 flex flex-col items-center gap-3 text-center">
-                    <ShoppingCart className="h-8 w-8 text-accent" />
                     <div>
-                      <p className="text-sm font-semibold">POS Simulation</p>
-                      <p className="text-xs text-muted-foreground">Generate order data</p>
+                      <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Price (₹) *</label>
+                      <input id="setup-item-price" type="number" min="1" value={manualItem.price} onChange={(e) => { setManualItem({ ...manualItem, price: e.target.value }); if (Number(e.target.value) > 0) setManualItemErrors(p => ({ ...p, price: "" })); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("setup-item-cost")?.focus(); } }}
+                        placeholder="280" className={`mt-1 w-full rounded-xl border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${manualItemErrors.price ? 'border-destructive' : 'border-border'}`} />
+                      {manualItemErrors.price && <p className="mt-0.5 text-[10px] text-destructive">{manualItemErrors.price}</p>}
                     </div>
-                    <span className="text-xs font-medium text-accent">Simulate orders →</span>
-                  </a>
+                    <div>
+                      <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Food Cost (₹) *</label>
+                      <input id="setup-item-cost" type="number" min="0" value={manualItem.cost} onChange={(e) => { setManualItem({ ...manualItem, cost: e.target.value }); if (Number(e.target.value) >= 0) setManualItemErrors(p => ({ ...p, cost: "" })); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("setup-item-cat")?.focus(); } }}
+                        placeholder="100" className={`mt-1 w-full rounded-xl border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${manualItemErrors.cost ? 'border-destructive' : 'border-border'}`} />
+                      {manualItemErrors.cost && <p className="mt-0.5 text-[10px] text-destructive">{manualItemErrors.cost}</p>}
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Category *</label>
+                      <select id="setup-item-cat" value={manualItem.category} onChange={(e) => { setManualItem({ ...manualItem, category: e.target.value }); if (e.target.value) setManualItemErrors(p => ({ ...p, category: "" })); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); /* submit */ const btn = document.getElementById("setup-add-item-btn"); if (btn) btn.click(); } }}
+                        className={`mt-1 w-full appearance-none rounded-xl border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${manualItemErrors.category ? 'border-destructive' : 'border-border'}`}>
+                        <option value="">Select</option>
+                        {setupCategoryOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                      {manualItemErrors.category && <p className="mt-0.5 text-[10px] text-destructive">{manualItemErrors.category}</p>}
+                    </div>
+                  </div>
+                  <button id="setup-add-item-btn" onClick={() => {
+                    const errs: Record<string, string> = {};
+                    if (!manualItem.name.trim()) errs.name = "Required";
+                    const p = Number(manualItem.price), c = Number(manualItem.cost);
+                    if (!manualItem.price || p <= 0) errs.price = "Required";
+                    if (!manualItem.cost && manualItem.cost !== "0") errs.cost = "Required";
+                    if (c >= p && p > 0) errs.cost = "Must be < price";
+                    if (!manualItem.category) errs.category = "Required";
+                    if (Object.values(errs).some(Boolean)) { setManualItemErrors(errs); return; }
+                    setManualItemErrors({});
+                    addMenuItem({ name: manualItem.name.trim(), price: p, cost: c, category: manualItem.category });
+                    toast.success(`${manualItem.name.trim()} added!`);
+                    setManualItem({ name: "", price: "", cost: "", category: "" });
+                    document.getElementById("setup-item-name")?.focus();
+                  }} className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:brightness-110 transition-all">
+                    <PlusCircle className="h-3.5 w-3.5" /> Add Item
+                  </button>
+
+                  {/* Mini table of added items */}
+                  {menuItems.length > 0 && (
+                    <div className="mt-4 max-h-40 overflow-y-auto rounded-lg border border-border/50">
+                      <table className="w-full text-xs">
+                        <thead className="bg-secondary/50 sticky top-0"><tr className="text-muted-foreground"><th className="px-3 py-1.5 text-left font-medium">Name</th><th className="px-3 py-1.5 text-right font-medium">Price</th><th className="px-3 py-1.5 text-right font-medium">Cost</th><th className="px-3 py-1.5 text-left font-medium">Category</th><th className="px-2 py-1.5 w-8"></th></tr></thead>
+                        <tbody className="divide-y divide-border/20">
+                          {menuItems.map((item) => (
+                            <tr key={item.id} className="hover:bg-secondary/20 group">
+                              <td className="px-3 py-1.5 font-medium">{item.name}</td>
+                              <td className="px-3 py-1.5 text-right">₹{item.price}</td>
+                              <td className="px-3 py-1.5 text-right text-muted-foreground">₹{item.cost}</td>
+                              <td className="px-3 py-1.5 text-muted-foreground">{item.category}</td>
+                              <td className="px-2 py-1.5">
+                                <button onClick={() => { removeMenuItem(item.id); toast.success(`${item.name} removed`); }} className="opacity-0 group-hover:opacity-100 transition-opacity rounded-md p-0.5 hover:bg-destructive/10 text-muted-foreground hover:text-destructive" title="Delete item">
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
 
+                {/* ── Add Sales / Order Data ── */}
+                {menuItems.length > 0 && (
+                  <div className="glass-card p-5">
+                    <div className="flex items-center gap-2 mb-4">
+                      <ShoppingCart className="h-4 w-4 text-accent" />
+                      <h3 className="text-sm font-semibold">Add Sales Data</h3>
+                      {orders.length > 0 && <span className="ml-auto rounded-full bg-accent/10 px-2.5 py-0.5 text-[10px] font-bold text-accent">{orders.length} orders</span>}
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div>
+                        <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Menu Item</label>
+                        <select value={manualOrder.itemId} onChange={(e) => setManualOrder({ ...manualOrder, itemId: e.target.value })} className="mt-1 w-full appearance-none rounded-xl border border-border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20">
+                          <option value="">Select item</option>
+                          {menuItems.map((item) => <option key={item.id} value={item.id}>{item.name} — ₹{item.price}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Quantity</label>
+                        <input type="number" min="1" value={manualOrder.qty} onChange={(e) => setManualOrder({ ...manualOrder, qty: e.target.value })} className="mt-1 w-full rounded-xl border border-border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Channel</label>
+                        <select value={manualOrder.channel} onChange={(e) => setManualOrder({ ...manualOrder, channel: e.target.value })} className="mt-1 w-full appearance-none rounded-xl border border-border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20">
+                          <option value="OFFLINE">Offline / Dine-in</option>
+                          <option value="ZOMATO">Zomato</option>
+                          <option value="SWIGGY">Swiggy</option>
+                          <option value="OTHER">Other Online</option>
+                        </select>
+                      </div>
+                    </div>
+                    <button onClick={() => {
+                      if (!manualOrder.itemId) { toast.error("Select a menu item"); return; }
+                      const item = menuItems.find(m => m.id === Number(manualOrder.itemId));
+                      if (!item) return;
+                      const qty = Math.max(1, Number(manualOrder.qty) || 1);
+                      addOrder(
+                        [{ menuItemId: item.id, name: item.name, price: item.price, cost: item.cost, qty }],
+                        manualOrder.channel as any
+                      );
+                      toast.success(`Order added: ${qty}x ${item.name}`);
+                      setManualOrder({ itemId: "", qty: "1", channel: "OFFLINE" });
+                    }} className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-2 text-xs font-semibold text-accent-foreground hover:brightness-110 transition-all">
+                      <ShoppingCart className="h-3.5 w-3.5" /> Record Sale
+                    </button>
+                  </div>
+                )}
+
+                {/* ── Or Upload Excel ── */}
                 <div className="glass-card p-5">
                   <div className="flex items-center gap-2 mb-3">
                     <Upload className="h-4 w-4 text-muted-foreground" />
-                    <h3 className="text-sm font-semibold text-muted-foreground">Or upload an Excel or CSV file</h3>
+                    <h3 className="text-sm font-semibold">Or upload Excel / CSV</h3>
                   </div>
+                  <p className="text-xs text-muted-foreground mb-3">Upload a file with menu items or sales data. AI will auto-detect the format and import accordingly.</p>
                   <div className="grid grid-cols-2 gap-3">
                     <div
                       onDragOver={(e) => e.preventDefault()}
@@ -450,7 +601,13 @@ const RestaurantSetup = () => {
             {usesPOS !== null && (
               <div className="flex gap-3">
                 <button onClick={() => setStep(1)} className="rounded-xl border border-border px-5 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary">Back</button>
-                <button onClick={() => setStep(3)} className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:brightness-110">
+                <button onClick={() => {
+                  if (menuItems.length === 0) {
+                    toast.error("Add at least one menu item", { description: "You need menu items before the AI engine can analyze your data." });
+                    return;
+                  }
+                  setStep(3);
+                }} className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:brightness-110">
                   Activate AI Engine <ArrowRight className="h-4 w-4" />
                 </button>
               </div>

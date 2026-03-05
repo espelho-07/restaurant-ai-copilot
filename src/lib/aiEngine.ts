@@ -233,8 +233,10 @@ export function generateComboRecommendations(
     const sorted = coOccurrences.sort((a, b) => b.count - a.count);
     const combos: ComboRecommendation[] = [];
     const usedPairs = new Set<string>();
+    // Deduplication: track combos by sorted item IDs so ABC == BAC == CBA
+    const usedComboKeys = new Set<string>();
 
-    for (const pair of sorted.slice(0, 8)) {
+    for (const pair of sorted.slice(0, 12)) {
         const key = `${pair.itemA}-${pair.itemB}`;
         if (usedPairs.has(key)) continue;
         usedPairs.add(key);
@@ -244,6 +246,12 @@ export function generateComboRecommendations(
 
         const thirdItem = findThirdItem(pair.itemA, pair.itemB, sorted, menuItems);
         const comboItems = thirdItem ? [itemA, itemB, thirdItem] : [itemA, itemB];
+
+        // Deduplicate: create a canonical key from sorted item IDs
+        const comboKey = comboItems.map(i => i.id).sort((a, b) => a - b).join("-");
+        if (usedComboKeys.has(comboKey)) continue;
+        usedComboKeys.add(comboKey);
+
         const individualTotal = comboItems.reduce((s, i) => s + i.price, 0);
         const discount = Math.round(individualTotal * 0.1);
         const suggestedPrice = individualTotal - discount;
@@ -508,6 +516,198 @@ export function generateDashboardInsights(
         const prio = { high: 0, medium: 1, low: 2 };
         return prio[a.priority] - prio[b.priority];
     });
+}
+
+// ─── SALES VELOCITY & POPULARITY SCORING ──────────────────────────
+// Module 3 from deep-research-report: composite score using
+//   (a) total order frequency, (b) recency decay, (c) growth trend.
+
+export interface SalesVelocityItem {
+    item: MenuItem;
+    totalOrders: number;
+    recencyScore: number;   // 0-1, higher = ordered more recently
+    growthScore: number;    // -1 to +1, positive = trending up
+    velocityScore: number;  // 0-100 composite
+    velocityLabel: string;
+}
+
+export function calculateSalesVelocity(
+    menuItems: MenuItem[],
+    orders: Order[]
+): SalesVelocityItem[] {
+    if (orders.length === 0 || menuItems.length === 0) {
+        return menuItems.map((item) => ({
+            item, totalOrders: 0, recencyScore: 0, growthScore: 0,
+            velocityScore: 0, velocityLabel: "No Data",
+        }));
+    }
+
+    const now = Date.now();
+    const DECAY_LAMBDA = 0.05; // decay factor per day
+    const ONE_DAY = 86400000;
+    const ONE_WEEK = 7 * ONE_DAY;
+
+    // Determine time boundaries
+    const timestamps = orders.map((o) => new Date(o.timestamp).getTime());
+    const minTime = Math.min(...timestamps);
+    const dataSpanDays = Math.max((now - minTime) / ONE_DAY, 1);
+
+    // Split orders into "recent" (last 7 days) vs "previous" (7-14 days ago)
+    const recentCutoff = now - ONE_WEEK;
+    const prevCutoff = now - 2 * ONE_WEEK;
+
+    const results: SalesVelocityItem[] = [];
+    let maxTotalOrders = 1;
+
+    // Pre-calculate per-item metrics
+    const itemData = menuItems.map((item) => {
+        const itemOrders = orders.filter((o) =>
+            o.items.some((oi) => oi.menuItemId === item.id)
+        );
+        const totalOrders = itemOrders.reduce((s, o) => {
+            const oi = o.items.find((i) => i.menuItemId === item.id);
+            return s + (oi ? oi.qty : 0);
+        }, 0);
+        if (totalOrders > maxTotalOrders) maxTotalOrders = totalOrders;
+
+        // Recency: exponential decay weight of most recent order
+        let recencyScore = 0;
+        if (itemOrders.length > 0) {
+            const mostRecent = Math.max(...itemOrders.map((o) => new Date(o.timestamp).getTime()));
+            const daysSinceLast = (now - mostRecent) / ONE_DAY;
+            recencyScore = Math.exp(-DECAY_LAMBDA * daysSinceLast);
+        }
+
+        // Growth: compare last-week qty vs previous-week qty
+        const recentQty = itemOrders
+            .filter((o) => new Date(o.timestamp).getTime() >= recentCutoff)
+            .reduce((s, o) => {
+                const oi = o.items.find((i) => i.menuItemId === item.id);
+                return s + (oi ? oi.qty : 0);
+            }, 0);
+        const prevQty = itemOrders
+            .filter((o) => {
+                const t = new Date(o.timestamp).getTime();
+                return t >= prevCutoff && t < recentCutoff;
+            })
+            .reduce((s, o) => {
+                const oi = o.items.find((i) => i.menuItemId === item.id);
+                return s + (oi ? oi.qty : 0);
+            }, 0);
+        const growthScore = prevQty > 0
+            ? Math.max(-1, Math.min(1, (recentQty - prevQty) / prevQty))
+            : recentQty > 0 ? 1 : 0;
+
+        return { item, totalOrders, recencyScore, growthScore };
+    });
+
+    // Normalize and compute composite score
+    for (const d of itemData) {
+        const freqNorm = d.totalOrders / maxTotalOrders;           // 0-1
+        const recNorm = d.recencyScore;                             // already 0-1
+        const growthNorm = (d.growthScore + 1) / 2;                 // map -1..1 → 0..1
+
+        // Weighted composite: 40% frequency, 35% recency, 25% growth
+        const raw = 0.40 * freqNorm + 0.35 * recNorm + 0.25 * growthNorm;
+        const velocityScore = Math.round(raw * 100);
+
+        const velocityLabel = velocityScore >= 80 ? "🔥 Hot Seller"
+            : velocityScore >= 60 ? "📈 Trending Up"
+                : velocityScore >= 40 ? "➡️ Steady"
+                    : velocityScore >= 20 ? "📉 Slowing Down"
+                        : "❄️ Cold Item";
+
+        results.push({ ...d, velocityScore, velocityLabel });
+    }
+
+    return results.sort((a, b) => b.velocityScore - a.velocityScore);
+}
+
+// ─── SMART UPSELL PRIORITIZATION ──────────────────────────────────
+// Module 7 from deep-research-report:
+//   upsell_score(A, B) = confidence(A→B) × (margin_B / max_margin)
+
+export interface UpsellSuggestion {
+    forItem: MenuItem;
+    upsells: {
+        item: MenuItem;
+        score: number;         // 0-1, higher = better upsell
+        confidence: number;    // P(B|A) as percentage
+        marginPct: number;     // margin of upsell item
+        reasoning: string;
+    }[];
+}
+
+export function generateUpsellSuggestions(
+    menuItems: MenuItem[],
+    orders: Order[]
+): UpsellSuggestion[] {
+    if (orders.length < 3 || menuItems.length < 2) return [];
+
+    // Step 1: Build item → orders-containing-item map
+    const itemOrderSets = new Map<number, Set<string>>();
+    for (const item of menuItems) {
+        itemOrderSets.set(item.id, new Set());
+    }
+    for (const order of orders) {
+        for (const oi of order.items) {
+            if (itemOrderSets.has(oi.menuItemId)) {
+                itemOrderSets.get(oi.menuItemId)!.add(order.id);
+            }
+        }
+    }
+
+    // Step 2: Compute confidence(A→B) = P(B|A) = |orders with A∩B| / |orders with A|
+    const maxMargin = Math.max(...menuItems.map((m) => calculateMargin(m)), 1);
+
+    const suggestions: UpsellSuggestion[] = [];
+
+    for (const itemA of menuItems) {
+        const ordersWithA = itemOrderSets.get(itemA.id);
+        if (!ordersWithA || ordersWithA.size < 1) continue;
+
+        const upsells: UpsellSuggestion["upsells"] = [];
+
+        for (const itemB of menuItems) {
+            if (itemB.id === itemA.id) continue;
+            const ordersWithB = itemOrderSets.get(itemB.id);
+            if (!ordersWithB || ordersWithB.size < 1) continue;
+
+            // Intersection: orders containing both A and B
+            let coCount = 0;
+            for (const oid of ordersWithA) {
+                if (ordersWithB.has(oid)) coCount++;
+            }
+            if (coCount < 1) continue;
+
+            const confidence = coCount / ordersWithA.size;         // P(B|A)
+            const marginB = calculateMargin(itemB);
+            const normalizedMargin = marginB / maxMargin;
+
+            // Upsell score = confidence × normalized margin
+            const score = confidence * normalizedMargin;
+
+            if (score > 0.05) { // threshold to avoid noise
+                upsells.push({
+                    item: itemB,
+                    score: Math.round(score * 100) / 100,
+                    confidence: Math.round(confidence * 100),
+                    marginPct: Math.round(marginB * 10) / 10,
+                    reasoning: `${Math.round(confidence * 100)}% of customers who ordered ${itemA.name} also ordered ${itemB.name} (${coCount}/${ordersWithA.size} orders). ${itemB.name} has ${marginB.toFixed(0)}% margin.`,
+                });
+            }
+        }
+
+        // Sort by upsell score and keep top 3
+        upsells.sort((a, b) => b.score - a.score);
+        if (upsells.length > 0) {
+            suggestions.push({ forItem: itemA, upsells: upsells.slice(0, 3) });
+        }
+    }
+
+    return suggestions.sort((a, b) =>
+        (b.upsells[0]?.score || 0) - (a.upsells[0]?.score || 0)
+    );
 }
 
 // ─── VOICE ORDER NLP PARSER ───────────────────────────────────────

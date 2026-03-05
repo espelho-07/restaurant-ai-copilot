@@ -12,6 +12,16 @@ export default function Login() {
 
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!email.trim() || !password) {
+            toast.error("Please fill in all fields");
+            setLoading(false);
+            return;
+        }
+        if (password.length < 6) {
+            toast.error("Password must be at least 6 characters");
+            setLoading(false);
+            return;
+        }
         setLoading(true);
 
         try {
@@ -71,10 +81,13 @@ export default function Login() {
                                 <div className="relative mt-2">
                                     <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                                     <input
+                                        id="login-email"
                                         type="email"
                                         required
                                         value={email}
                                         onChange={(e) => setEmail(e.target.value)}
+                                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("login-password")?.focus(); } }}
+                                        placeholder="you@restaurant.com"
                                         className="block w-full rounded-xl border border-border bg-card py-2.5 pl-10 pr-4 text-sm shadow-sm placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all"
                                     />
                                 </div>
@@ -87,10 +100,13 @@ export default function Login() {
                                 <div className="relative mt-2">
                                     <KeyRound className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                                     <input
+                                        id="login-password"
                                         type="password"
                                         required
+                                        minLength={6}
                                         value={password}
                                         onChange={(e) => setPassword(e.target.value)}
+                                        placeholder="Min 6 characters"
                                         className="block w-full rounded-xl border border-border bg-card py-2.5 pl-10 pr-4 text-sm shadow-sm placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all"
                                     />
                                 </div>

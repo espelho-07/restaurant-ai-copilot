@@ -28,6 +28,7 @@ interface RestaurantDataContextType {
     commissions: ChannelCommission[];
     isLoading: boolean;
     addMenuItem: (item: Omit<MenuItem, "id">) => Promise<void>;
+    removeMenuItem: (id: number) => Promise<void>;
     addOrder: (items: OrderItem[], channel?: SalesChannel) => Promise<Order | null>;
     importMenuItems: (items: Omit<MenuItem, "id">[]) => Promise<{ added: number; duplicates: number }>;
     importOrders: (newOrders: Order[]) => Promise<number>;
@@ -105,6 +106,10 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
         setMenuItems(prev => [newItem, ...prev]);
     };
 
+    const removeMenuItem = async (id: number) => {
+        setMenuItems(prev => prev.filter(item => item.id !== id));
+    };
+
     const addOrder = async (items: OrderItem[], channel: SalesChannel = "OFFLINE") => {
         const orderId = `ORD-${Date.now()}`;
         const total = items.reduce((s, i) => s + i.price * i.qty, 0);
@@ -148,7 +153,7 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
         <RestaurantDataContext.Provider
             value={{
                 menuItems, orders, profile, commissions, isLoading,
-                addMenuItem, addOrder, importMenuItems, importOrders,
+                addMenuItem, removeMenuItem, addOrder, importMenuItems, importOrders,
                 updateProfile, updateCommission, getCommission,
                 totalRevenue, totalOrders, avgOrderValue,
             }}
