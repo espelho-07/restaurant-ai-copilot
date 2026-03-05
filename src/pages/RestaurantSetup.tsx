@@ -1,4 +1,5 @@
 import { DashboardNav } from "@/components/DashboardNav";
+import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   Store,
@@ -27,6 +28,13 @@ const cuisineTypes = [
 
 const RestaurantSetup = () => {
   const { menuItems, importMenuItems, importOrders, updateProfile, profile, commissions, updateCommission } = useRestaurantData();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (profile.setupComplete) {
+      navigate('/dashboard');
+    }
+  }, [profile.setupComplete, navigate]);
 
   const [step, setStep] = useState(1);
   const [usesPOS, setUsesPOS] = useState<boolean | null>(null);
