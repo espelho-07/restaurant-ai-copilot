@@ -1,17 +1,23 @@
 import { DashboardNav } from "@/components/DashboardNav";
 import { motion } from "framer-motion";
-import { ShoppingCart, Plus, Minus, Trash2, Sparkles, CheckCircle2 } from "lucide-react";
+import { ShoppingCart, Plus, Minus, Trash2, Sparkles, CheckCircle2, Zap } from "lucide-react";
 import { useState, useMemo } from "react";
 import { useRestaurantData } from "@/lib/restaurantData";
-import { calculateMargin } from "@/lib/aiEngine";
-import type { OrderItem } from "@/lib/types";
+import { calculateMargin, calculateOnlineMargin, getOrderCountForItem } from "@/lib/aiEngine";
+import type { OrderItem, SalesChannel } from "@/lib/types";
 import { toast } from "sonner";
 
 const OrdersSimulation = () => {
-    const { menuItems, addOrder, totalOrders } = useRestaurantData();
+    const { menuItems, orders, commissions, addOrder, totalOrders } = useRestaurantData();
     const [cart, setCart] = useState<OrderItem[]>([]);
     const [orderCount, setOrderCount] = useState(0);
     const [activeCategory, setActiveCategory] = useState("All");
+    const [channel, setChannel] = useState<SalesChannel>("OFFLINE");
+
+    const channelCommission = useMemo(() => {
+        const c = commissions.find(x => x.channel === channel);
+        return c?.enabled ? c.commissionPct : 0;
+    }, [commissions, channel]);
 
     const categories = useMemo(() => {
         const cats = Array.from(new Set(menuItems.map((i) => i.category)));
@@ -56,17 +62,46 @@ const OrdersSimulation = () => {
     };
 
     const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
+    const commissionVal = subtotal * (channelCommission / 100);
     const totalCost = cart.reduce((s, i) => s + i.cost * i.qty, 0);
-    const marginPct = subtotal > 0 ? ((subtotal - totalCost) / subtotal) * 100 : 0;
+    const marginPct = subtotal > 0 ? ((subtotal - commissionVal - totalCost) / subtotal) * 100 : 0;
+
+    // Smart upsell based on co-occurrence
+    const upsellSuggestion = useMemo(() => {
+        if (cart.length === 0) return null;
+        const cartIds = new Set(cart.map((i) => i.menuItemId));
+        // Build co-occurrence from orders
+        const coOccurrence = new Map<number, number>();
+        for (const order of orders) {
+            const orderItemIds = order.items.map((oi) => oi.menuItemId);
+            const hasCartItem = orderItemIds.some((id) => cartIds.has(id));
+            if (!hasCartItem) continue;
+            for (const oi of order.items) {
+                if (!cartIds.has(oi.menuItemId)) {
+                    coOccurrence.set(oi.menuItemId, (coOccurrence.get(oi.menuItemId) || 0) + 1);
+                }
+            }
+        }
+        let bestId = -1;
+        let bestCount = 0;
+        for (const [id, count] of coOccurrence) {
+            if (count > bestCount) { bestCount = count; bestId = id; }
+        }
+        if (bestId < 0 || bestCount < 1) return null;
+        const item = menuItems.find((m) => m.id === bestId);
+        if (!item) return null;
+        const pct = Math.round((bestCount / orders.length) * 100);
+        return { item, count: bestCount, pct };
+    }, [cart, orders, menuItems]);
 
     const handleGenerateOrder = () => {
         if (cart.length === 0) return;
 
-        const order = addOrder(cart);
+        const order = addOrder(cart, channel);
         setOrderCount((c) => c + 1);
         setCart([]);
         toast.success(`Order ${order.id} generated!`, {
-            description: `₹${order.total} · ${order.margin.toFixed(0)}% margin`,
+            description: `₹${order.total} via ${channel} · ${order.margin.toFixed(0)}% margin`,
         });
     };
 
@@ -142,10 +177,10 @@ const OrdersSimulation = () => {
                                                 </div>
                                                 <span
                                                     className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${margin > 60
-                                                            ? "bg-success/10 text-success"
-                                                            : margin > 40
-                                                                ? "bg-accent/10 text-accent"
-                                                                : "bg-destructive/10 text-destructive"
+                                                        ? "bg-success/10 text-success"
+                                                        : margin > 40
+                                                            ? "bg-accent/10 text-accent"
+                                                            : "bg-destructive/10 text-destructive"
                                                         }`}
                                                 >
                                                     {margin.toFixed(0)}%
@@ -244,6 +279,30 @@ const OrdersSimulation = () => {
                                     ))}
                                 </div>
 
+                                {/* Smart Upsell Suggestion */}
+                                {upsellSuggestion && (
+                                    <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="mt-3 rounded-xl border border-accent/20 bg-accent/5 px-4 py-3">
+                                        <div className="flex items-center gap-1.5 mb-1">
+                                            <Zap className="h-3 w-3 text-accent" />
+                                            <span className="text-[11px] font-semibold text-accent">Smart Upsell</span>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                            Customers who order these items also add{" "}
+                                            <span className="font-semibold text-foreground">{upsellSuggestion.item.name}</span>{" "}
+                                            <span className="font-semibold text-accent">{upsellSuggestion.pct}%</span> of the time.
+                                        </p>
+                                        <div className="mt-2 flex items-center justify-between">
+                                            <span className="text-xs font-semibold">₹{upsellSuggestion.item.price}</span>
+                                            <button
+                                                onClick={() => addToCart(upsellSuggestion.item.id)}
+                                                className="inline-flex items-center gap-1 rounded-lg bg-accent px-3 py-1 text-[11px] font-semibold text-accent-foreground hover:brightness-110"
+                                            >
+                                                <Plus className="h-3 w-3" /> Add
+                                            </button>
+                                        </div>
+                                    </motion.div>
+                                )}
+
                                 {/* AI Insight */}
                                 {cart.length >= 2 && (
                                     <div className="mt-4 insight-card">
@@ -257,8 +316,8 @@ const OrdersSimulation = () => {
                                             This order has a{" "}
                                             <span
                                                 className={`font-bold ${marginPct > 50
-                                                        ? "text-success"
-                                                        : "text-destructive"
+                                                    ? "text-success"
+                                                    : "text-destructive"
                                                     }`}
                                             >
                                                 {marginPct.toFixed(0)}% margin
@@ -277,11 +336,17 @@ const OrdersSimulation = () => {
                                         <span>Subtotal</span>
                                         <span>₹{subtotal}</span>
                                     </div>
+                                    {channelCommission > 0 && (
+                                        <div className="flex items-center justify-between text-xs text-destructive">
+                                            <span>Commission ({channelCommission}%)</span>
+                                            <span>-₹{commissionVal.toFixed(0)}</span>
+                                        </div>
+                                    )}
                                     <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                        <span>Margin</span>
+                                        <span>Net Margin</span>
                                         <span
                                             className={
-                                                marginPct > 50 ? "text-success" : "text-destructive"
+                                                marginPct > 50 ? "text-success" : marginPct > 0 ? "text-accent" : "text-destructive"
                                             }
                                         >
                                             {marginPct.toFixed(1)}%
@@ -292,6 +357,21 @@ const OrdersSimulation = () => {
                                         <span className="font-display text-xl font-bold">
                                             ₹{subtotal}
                                         </span>
+                                    </div>
+                                </div>
+
+                                <div className="mt-4">
+                                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Sales Channel</label>
+                                    <div className="flex gap-2">
+                                        {commissions.filter(c => c.enabled).map(c => (
+                                            <button
+                                                key={c.channel}
+                                                onClick={() => setChannel(c.channel)}
+                                                className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${channel === c.channel ? "bg-primary text-primary-foreground" : "bg-card border border-border text-muted-foreground hover:bg-secondary"}`}
+                                            >
+                                                {c.label}
+                                            </button>
+                                        ))}
                                     </div>
                                 </div>
 

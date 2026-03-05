@@ -1,5 +1,15 @@
-import React, { createContext, useContext, useState, useCallback } from "react";
-import type { MenuItem, Order, OrderItem } from "./types";
+import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
+import type { MenuItem, Order, OrderItem, SalesChannel, ChannelCommission } from "./types";
+
+// ─── LOCALSTORAGE KEYS ────────────────────────────────────────────
+
+const STORAGE_KEYS = {
+    menuItems: "rc_menu_items",
+    orders: "rc_orders",
+    restaurantProfile: "rc_restaurant_profile",
+    nextId: "rc_next_id",
+    commissions: "rc_commissions",
+};
 
 // ─── SEED DATA ────────────────────────────────────────────────────
 
@@ -18,32 +28,22 @@ const seedMenuItems: MenuItem[] = [
     { id: 12, name: "Fish Fry", price: 350, cost: 220, category: "Starters", aliases: ["fish fry", "fried fish", "machli"] },
 ];
 
-// Seed historical orders to bootstrap the AI engine
+const defaultCommissions: ChannelCommission[] = [
+    { channel: "OFFLINE", label: "Offline / Dine-in", commissionPct: 0, enabled: true },
+    { channel: "ZOMATO", label: "Zomato", commissionPct: 25, enabled: true },
+    { channel: "SWIGGY", label: "Swiggy", commissionPct: 22, enabled: true },
+    { channel: "OTHER", label: "Other Online", commissionPct: 15, enabled: false },
+];
+
 function generateSeedOrders(menu: MenuItem[]): Order[] {
     const orders: Order[] = [];
+    const channels: SalesChannel[] = ["OFFLINE", "ZOMATO", "SWIGGY", "OFFLINE", "OFFLINE"];
     const combos = [
-        [1, 10, 11],  // Butter Chicken + Naan + Lassi
-        [4, 7, 8],    // Burger + Fries + Coke
-        [3, 10],      // Biryani + Naan
-        [1, 10, 9],   // Butter Chicken + Naan + Gulab Jamun
-        [4, 8],       // Burger + Coke
-        [5, 11],      // Dosa + Lassi
-        [6, 10],      // Dal Makhani + Naan
-        [2, 10, 11],  // Paneer Tikka + Naan + Lassi
-        [4, 7],       // Burger + Fries
-        [1, 6, 10],   // Butter Chicken + Dal + Naan
-        [3, 8],       // Biryani + Coke
-        [12, 8],      // Fish Fry + Coke
-        [2, 8],       // Paneer Tikka + Coke
-        [5, 8],       // Dosa + Coke
-        [4, 7, 8],    // Burger + Fries + Coke (repeated — common combo)
-        [1, 10],      // Butter Chicken + Naan (repeated — common)
-        [4, 7, 8],    // Burger + Fries + Coke
-        [1, 10, 11],  // Butter Chicken + Naan + Lassi
-        [6, 10, 9],   // Dal + Naan + Gulab Jamun
-        [3, 10, 8],   // Biryani + Naan + Coke
+        [1, 10, 11], [4, 7, 8], [3, 10], [1, 10, 9], [4, 8],
+        [5, 11], [6, 10], [2, 10, 11], [4, 7], [1, 6, 10],
+        [3, 8], [12, 8], [2, 8], [5, 8], [4, 7, 8],
+        [1, 10], [4, 7, 8], [1, 10, 11], [6, 10, 9], [3, 10, 8],
     ];
-
     const now = Date.now();
     combos.forEach((itemIds, i) => {
         const items: OrderItem[] = itemIds.map((id) => {
@@ -53,27 +53,66 @@ function generateSeedOrders(menu: MenuItem[]): Order[] {
         });
         const total = items.reduce((s, it) => s + it.price * it.qty, 0);
         const totalCost = items.reduce((s, it) => s + it.cost * it.qty, 0);
-
         orders.push({
             id: `SEED-${1000 + i}`,
-            items,
-            total,
-            totalCost,
+            items, total, totalCost,
             margin: ((total - totalCost) / total) * 100,
             timestamp: new Date(now - (combos.length - i) * 3600000 * Math.random() * 24),
+            channel: channels[i % channels.length],
         });
     });
-
     return orders;
 }
+
+// ─── LOCALSTORAGE HELPERS ─────────────────────────────────────────
+
+function loadFromStorage<T>(key: string, fallback: T): T {
+    try {
+        const stored = localStorage.getItem(key);
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            if (key === STORAGE_KEYS.orders && Array.isArray(parsed)) {
+                return parsed.map((o: any) => ({ ...o, channel: o.channel || "OFFLINE", timestamp: new Date(o.timestamp) })) as unknown as T;
+            }
+            return parsed;
+        }
+    } catch { /* corrupted — fall through */ }
+    return fallback;
+}
+
+function saveToStorage<T>(key: string, value: T): void {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* full or unavailable */ }
+}
+
+// ─── RESTAURANT PROFILE ──────────────────────────────────────────
+
+export interface RestaurantProfile {
+    name: string;
+    location: string;
+    cuisine: string;
+    usesPOS: boolean;
+    setupComplete: boolean;
+}
+
+const defaultProfile: RestaurantProfile = {
+    name: "", location: "", cuisine: "", usesPOS: false, setupComplete: false,
+};
 
 // ─── CONTEXT ──────────────────────────────────────────────────────
 
 interface RestaurantDataContextType {
     menuItems: MenuItem[];
     orders: Order[];
+    profile: RestaurantProfile;
+    commissions: ChannelCommission[];
     addMenuItem: (item: Omit<MenuItem, "id">) => void;
-    addOrder: (items: OrderItem[]) => Order;
+    addOrder: (items: OrderItem[], channel?: SalesChannel) => Order;
+    importMenuItems: (items: Omit<MenuItem, "id">[]) => { added: number; duplicates: number };
+    importOrders: (newOrders: Order[]) => number;
+    updateProfile: (updates: Partial<RestaurantProfile>) => void;
+    updateCommission: (channel: SalesChannel, updates: Partial<ChannelCommission>) => void;
+    getCommission: (channel: SalesChannel) => number;
+    resetData: () => void;
     totalRevenue: number;
     totalOrders: number;
     avgOrderValue: number;
@@ -82,35 +121,79 @@ interface RestaurantDataContextType {
 const RestaurantDataContext = createContext<RestaurantDataContextType | null>(null);
 
 export function RestaurantDataProvider({ children }: { children: React.ReactNode }) {
-    const [menuItems, setMenuItems] = useState<MenuItem[]>(seedMenuItems);
-    const [orders, setOrders] = useState<Order[]>(() => generateSeedOrders(seedMenuItems));
-    const [nextId, setNextId] = useState(13);
+    const [menuItems, setMenuItems] = useState<MenuItem[]>(() => loadFromStorage(STORAGE_KEYS.menuItems, seedMenuItems));
+    const [orders, setOrders] = useState<Order[]>(() => loadFromStorage(STORAGE_KEYS.orders, generateSeedOrders(seedMenuItems)));
+    const [profile, setProfile] = useState<RestaurantProfile>(() => loadFromStorage(STORAGE_KEYS.restaurantProfile, defaultProfile));
+    const [commissions, setCommissions] = useState<ChannelCommission[]>(() => loadFromStorage(STORAGE_KEYS.commissions, defaultCommissions));
+    const [nextId, setNextId] = useState<number>(() => loadFromStorage(STORAGE_KEYS.nextId, 13));
 
-    const addMenuItem = useCallback(
-        (item: Omit<MenuItem, "id">) => {
-            setMenuItems((prev) => [{ ...item, id: nextId }, ...prev]);
-            setNextId((id) => id + 1);
-        },
-        [nextId]
-    );
+    useEffect(() => { saveToStorage(STORAGE_KEYS.menuItems, menuItems); }, [menuItems]);
+    useEffect(() => { saveToStorage(STORAGE_KEYS.orders, orders); }, [orders]);
+    useEffect(() => { saveToStorage(STORAGE_KEYS.restaurantProfile, profile); }, [profile]);
+    useEffect(() => { saveToStorage(STORAGE_KEYS.commissions, commissions); }, [commissions]);
+    useEffect(() => { saveToStorage(STORAGE_KEYS.nextId, nextId); }, [nextId]);
 
-    const addOrder = useCallback(
-        (items: OrderItem[]) => {
-            const total = items.reduce((s, i) => s + i.price * i.qty, 0);
-            const totalCost = items.reduce((s, i) => s + i.cost * i.qty, 0);
-            const order: Order = {
-                id: `ORD-${1000 + orders.length}`,
-                items,
-                total,
-                totalCost,
-                margin: total > 0 ? ((total - totalCost) / total) * 100 : 0,
-                timestamp: new Date(),
-            };
-            setOrders((prev) => [order, ...prev]);
-            return order;
-        },
-        [orders.length]
-    );
+    const addMenuItem = useCallback((item: Omit<MenuItem, "id">) => {
+        setMenuItems((prev) => [{ ...item, id: nextId }, ...prev]);
+        setNextId((id) => id + 1);
+    }, [nextId]);
+
+    const addOrder = useCallback((items: OrderItem[], channel: SalesChannel = "OFFLINE") => {
+        const total = items.reduce((s, i) => s + i.price * i.qty, 0);
+        const totalCost = items.reduce((s, i) => s + i.cost * i.qty, 0);
+        const order: Order = {
+            id: `ORD-${1000 + orders.length}`,
+            items, total, totalCost,
+            margin: total > 0 ? ((total - totalCost) / total) * 100 : 0,
+            timestamp: new Date(),
+            channel,
+        };
+        setOrders((prev) => [order, ...prev]);
+        return order;
+    }, [orders.length]);
+
+    const importMenuItems = useCallback((items: Omit<MenuItem, "id">[]) => {
+        let added = 0; let duplicates = 0; let currentId = nextId;
+        setMenuItems((prev) => {
+            const existing = new Set(prev.map((m) => m.name.toLowerCase()));
+            const newItems: MenuItem[] = [];
+            for (const item of items) {
+                if (existing.has(item.name.toLowerCase())) { duplicates++; continue; }
+                existing.add(item.name.toLowerCase());
+                newItems.push({ ...item, id: currentId++ });
+                added++;
+            }
+            return [...newItems, ...prev];
+        });
+        setNextId(currentId);
+        return { added, duplicates };
+    }, [nextId]);
+
+    const importOrders = useCallback((newOrders: Order[]) => {
+        setOrders((prev) => [...newOrders, ...prev]);
+        return newOrders.length;
+    }, []);
+
+    const updateProfile = useCallback((updates: Partial<RestaurantProfile>) => {
+        setProfile((prev) => ({ ...prev, ...updates }));
+    }, []);
+
+    const updateCommission = useCallback((channel: SalesChannel, updates: Partial<ChannelCommission>) => {
+        setCommissions((prev) => prev.map((c) => c.channel === channel ? { ...c, ...updates } : c));
+    }, []);
+
+    const getCommission = useCallback((channel: SalesChannel) => {
+        const c = commissions.find((cc) => cc.channel === channel);
+        return c ? c.commissionPct : 0;
+    }, [commissions]);
+
+    const resetData = useCallback(() => {
+        setMenuItems(seedMenuItems);
+        setOrders(generateSeedOrders(seedMenuItems));
+        setNextId(13);
+        setProfile(defaultProfile);
+        setCommissions(defaultCommissions);
+    }, []);
 
     const totalRevenue = orders.reduce((s, o) => s + o.total, 0);
     const totalOrders = orders.length;
@@ -118,7 +201,12 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
 
     return (
         <RestaurantDataContext.Provider
-            value={{ menuItems, orders, addMenuItem, addOrder, totalRevenue, totalOrders, avgOrderValue }}
+            value={{
+                menuItems, orders, profile, commissions,
+                addMenuItem, addOrder, importMenuItems, importOrders,
+                updateProfile, updateCommission, getCommission, resetData,
+                totalRevenue, totalOrders, avgOrderValue,
+            }}
         >
             {children}
         </RestaurantDataContext.Provider>

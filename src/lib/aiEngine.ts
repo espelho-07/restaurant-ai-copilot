@@ -1,5 +1,5 @@
 // AI Revenue Intelligence Engine
-// Pure functions that analyze restaurant POS data and generate insights
+// Channel-aware analysis with commission support
 
 import type {
     MenuItem,
@@ -7,12 +7,27 @@ import type {
     PriceRecommendation,
     ComboRecommendation,
     AIInsight,
+    ImpactLevel,
+    SalesChannel,
+    ChannelCommission,
+    ChannelMetrics,
 } from "./types";
 
-// ─── PRICE OPTIMIZATION ENGINE ────────────────────────────────────
+// ─── HELPERS ──────────────────────────────────────────────────────
 
 export function calculateMargin(item: MenuItem): number {
     return ((item.price - item.cost) / item.price) * 100;
+}
+
+export function calculateOnlineMargin(item: MenuItem, commissionPct: number): number {
+    const commission = item.price * (commissionPct / 100);
+    const netRevenue = item.price - commission;
+    return netRevenue > 0 ? ((netRevenue - item.cost) / item.price) * 100 : -100;
+}
+
+export function calculateOnlineContribution(item: MenuItem, commissionPct: number): number {
+    const commission = item.price * (commissionPct / 100);
+    return item.price - commission - item.cost;
 }
 
 export function getOrderCountForItem(itemId: number, orders: Order[]): number {
@@ -22,96 +37,179 @@ export function getOrderCountForItem(itemId: number, orders: Order[]): number {
     }, 0);
 }
 
-export function generatePriceRecommendations(
+function clampConfidence(raw: number): number {
+    return Math.round(Math.max(15, Math.min(98, raw)));
+}
+
+function calcImpactLevel(revenueChangePct: number, orderCount: number): ImpactLevel {
+    if (Math.abs(revenueChangePct) >= 10 || orderCount >= 5) return "HIGH";
+    if (Math.abs(revenueChangePct) >= 5 || orderCount >= 3) return "MEDIUM";
+    return "LOW";
+}
+
+// ─── CHANNEL METRICS ──────────────────────────────────────────────
+
+export function calculateChannelMetrics(
     menuItems: MenuItem[],
     orders: Order[]
+): ChannelMetrics[] {
+    const channelMap = new Map<SalesChannel, { orders: Order[] }>();
+    for (const order of orders) {
+        const ch = order.channel || "OFFLINE";
+        if (!channelMap.has(ch)) channelMap.set(ch, { orders: [] });
+        channelMap.get(ch)!.orders.push(order);
+    }
+
+    const metrics: ChannelMetrics[] = [];
+    for (const [channel, data] of channelMap) {
+        const revenue = data.orders.reduce((s, o) => s + o.total, 0);
+        const avgMargin = data.orders.length > 0
+            ? data.orders.reduce((s, o) => s + o.margin, 0) / data.orders.length : 0;
+        const aov = data.orders.length > 0 ? revenue / data.orders.length : 0;
+
+        // Top items for this channel
+        const itemCounts = new Map<string, number>();
+        for (const order of data.orders) {
+            for (const oi of order.items) {
+                itemCounts.set(oi.name, (itemCounts.get(oi.name) || 0) + oi.qty);
+            }
+        }
+        const topItems = Array.from(itemCounts.entries())
+            .map(([name, count]) => ({ name, count }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 3);
+
+        metrics.push({ channel, orderCount: data.orders.length, revenue, avgMargin, avgOrderValue: aov, topItems });
+    }
+
+    return metrics.sort((a, b) => b.revenue - a.revenue);
+}
+
+// ─── PRICE OPTIMIZATION ENGINE (Channel-Aware) ───────────────────
+
+export function generatePriceRecommendations(
+    menuItems: MenuItem[],
+    orders: Order[],
+    commissions: ChannelCommission[] = []
 ): PriceRecommendation[] {
     const totalOrders = orders.length || 1;
+    const avgCommission = commissions.length > 0
+        ? commissions.filter((c) => c.channel !== "OFFLINE" && c.enabled).reduce((s, c) => s + c.commissionPct, 0) /
+        Math.max(commissions.filter((c) => c.channel !== "OFFLINE" && c.enabled).length, 1) : 22;
+
     const recommendations: PriceRecommendation[] = [];
 
     for (const item of menuItems) {
-        const margin = calculateMargin(item);
+        const offlineMargin = calculateMargin(item);
+        const onlineMargin = calculateOnlineMargin(item, avgCommission);
+        const onlineContribution = calculateOnlineContribution(item, avgCommission);
         const orderCount = getOrderCountForItem(item.id, orders);
         const orderFreq = orderCount / totalOrders;
 
-        // Classify demand level
-        const demandLevel: "high" | "medium" | "low" =
-            orderFreq > 0.5 ? "high" : orderFreq > 0.2 ? "medium" : "low";
+        // Channel distribution
+        const onlineOrders = orders.filter((o) => o.channel !== "OFFLINE" && o.items.some((oi) => oi.menuItemId === item.id));
+        const offlineOrders = orders.filter((o) => o.channel === "OFFLINE" && o.items.some((oi) => oi.menuItemId === item.id));
+        const onlinePct = orderCount > 0 ? Math.round((onlineOrders.length / Math.max(onlineOrders.length + offlineOrders.length, 1)) * 100) : 0;
 
-        // Classify margin level
-        const marginLevel: "high" | "medium" | "low" =
-            margin > 60 ? "high" : margin > 40 ? "medium" : "low";
+        const demandLevel: "high" | "medium" | "low" = orderFreq > 0.5 ? "high" : orderFreq > 0.2 ? "medium" : "low";
+        const marginLevel: "high" | "medium" | "low" = offlineMargin > 60 ? "high" : offlineMargin > 40 ? "medium" : "low";
 
         let suggestedPrice = item.price;
+        let suggestedOnlinePrice: number | undefined;
         let reason = "";
         let estimatedRevenueChange = 0;
+        const reasoning: string[] = [];
+        const impactedMetrics: string[] = [];
 
-        if (demandLevel === "high" && marginLevel === "low") {
-            // High demand, low margin → increase price
+        reasoning.push(`${item.name}: ₹${item.price} (cost ₹${item.cost}), offline margin ${offlineMargin.toFixed(1)}%.`);
+        reasoning.push(`Online margin after ${avgCommission}% commission: ${onlineMargin.toFixed(1)}% (₹${onlineContribution.toFixed(0)} contribution).`);
+        reasoning.push(`Ordered ${orderCount} times (${(orderFreq * 100).toFixed(0)}% frequency). ${onlinePct}% online, ${100 - onlinePct}% offline.`);
+
+        if (onlineContribution < 0) {
+            // UNPROFITABLE ONLINE
+            const minOnlinePrice = Math.ceil((item.cost / (1 - avgCommission / 100)) / 5) * 5;
+            suggestedOnlinePrice = minOnlinePrice + 10;
+            reason = `⚠️ UNPROFITABLE ONLINE: ${item.name} loses ₹${Math.abs(onlineContribution).toFixed(0)} per online sale. Online price must be ≥₹${minOnlinePrice} to break even.`;
+            estimatedRevenueChange = 15;
+            reasoning.push(`CRITICAL: Online contribution = −₹${Math.abs(onlineContribution).toFixed(0)} per unit.`);
+            reasoning.push(`Breakeven online price: ₹${minOnlinePrice}. Suggested: ₹${suggestedOnlinePrice}.`);
+            impactedMetrics.push("Online Profitability", "Revenue Loss Prevention");
+        } else if (demandLevel === "high" && marginLevel === "low") {
             const increase = Math.round(item.price * 0.12);
             suggestedPrice = item.price + increase;
-            reason = `High demand (${orderCount} orders) but low margin (${margin.toFixed(0)}%). A 12% price increase is unlikely to reduce demand and will significantly improve profitability.`;
+            suggestedOnlinePrice = suggestedPrice + Math.round(suggestedPrice * (avgCommission / 100) * 0.5);
+            reason = `High demand (${orderCount} orders) but low margin (${offlineMargin.toFixed(0)}%). Price increase + higher online price to offset commission.`;
             estimatedRevenueChange = 12;
+            reasoning.push(`Recommendation: Offline ₹${item.price} → ₹${suggestedPrice}, Online ₹${suggestedOnlinePrice}.`);
+            impactedMetrics.push("Revenue", "Profit Margin", "Online Profitability");
         } else if (demandLevel === "high" && marginLevel === "medium") {
-            // High demand, medium margin → slight increase
             const increase = Math.round(item.price * 0.07);
             suggestedPrice = item.price + increase;
-            reason = `Strong demand supports a modest 7% price increase without affecting order volume. Current margin of ${margin.toFixed(0)}% can be improved.`;
+            suggestedOnlinePrice = suggestedPrice + Math.round(suggestedPrice * (avgCommission / 100) * 0.3);
+            reason = `Strong demand supports a modest price increase. Online price adjusted to maintain margin after commission.`;
             estimatedRevenueChange = 7;
+            reasoning.push(`Recommendation: Offline ₹${item.price} → ₹${suggestedPrice}, Online ₹${suggestedOnlinePrice}.`);
+            impactedMetrics.push("Revenue", "Profit Margin");
         } else if (demandLevel === "low" && marginLevel === "high") {
-            // Low demand, high margin → promote or slight discount
             const discount = Math.round(item.price * 0.05);
             suggestedPrice = item.price - discount;
-            reason = `Hidden Star: ${margin.toFixed(0)}% margin but only ${orderCount} orders. A 5% promotional discount can boost visibility and volume while maintaining strong margins.`;
-            estimatedRevenueChange = 15; // volume increase offsets discount
+            reason = `Hidden Star: ${offlineMargin.toFixed(0)}% margin but only ${orderCount} orders. Promote to boost volume.`;
+            estimatedRevenueChange = 15;
+            reasoning.push(`This is a Hidden Star — high profitability but low visibility.`);
+            impactedMetrics.push("Item Visibility", "Order Volume", "Revenue");
         } else if (demandLevel === "low" && marginLevel === "low") {
-            // Low demand, low margin → reprice or replace
             const increase = Math.round(item.price * 0.15);
             suggestedPrice = item.price + increase;
-            reason = `Poor performer: low demand (${orderCount} orders) and low margin (${margin.toFixed(0)}%). Either increase price by 15% or consider replacing this item.`;
-            estimatedRevenueChange = -5; // might lose some orders
+            reason = `Poor performer: low demand and low margin. Increase price or consider replacing.`;
+            estimatedRevenueChange = -5;
+            impactedMetrics.push("Profit Margin", "Menu Efficiency");
         } else {
-            // Balanced items → no change
-            suggestedPrice = item.price;
-            reason = `Currently well-optimized. ${margin.toFixed(0)}% margin with ${orderCount} orders shows healthy performance.`;
+            reason = `Well-optimized. ${offlineMargin.toFixed(0)}% offline margin, ${onlineMargin.toFixed(0)}% online margin.`;
             estimatedRevenueChange = 0;
+            impactedMetrics.push("Revenue");
         }
 
-        // Round to nearest ₹5
         suggestedPrice = Math.round(suggestedPrice / 5) * 5;
+        if (suggestedOnlinePrice) suggestedOnlinePrice = Math.round(suggestedOnlinePrice / 5) * 5;
+
+        const sampleFactor = Math.min(totalOrders / 10, 1) * 30;
+        const freqFactor = Math.min(orderFreq * 2, 1) * 25;
+        const marginClarity = (offlineMargin > 60 || offlineMargin < 35) ? 25 : 15;
+        const confidence = clampConfidence(sampleFactor + freqFactor + marginClarity + 15);
+        const impactLevel = calcImpactLevel(estimatedRevenueChange, orderCount);
+        const estimatedMonthlyImpact = Math.round(item.price * (estimatedRevenueChange / 100) * Math.max(orderCount, 1) * 4.3);
 
         recommendations.push({
             menuItem: item,
             currentPrice: item.price,
             suggestedPrice,
+            suggestedOnlinePrice,
             reason,
             estimatedRevenueChange,
+            estimatedMonthlyImpact,
             demandLevel,
             marginLevel,
             orderCount,
+            offlineMarginPct: offlineMargin,
+            onlineMarginPct: onlineMargin,
+            confidence,
+            impactLevel,
+            reasoning,
+            impactedMetrics,
         });
     }
 
-    // Sort by absolute revenue change potential (highest first)
-    return recommendations.sort(
-        (a, b) => Math.abs(b.estimatedRevenueChange) - Math.abs(a.estimatedRevenueChange)
-    );
+    return recommendations.sort((a, b) => Math.abs(b.estimatedRevenueChange) - Math.abs(a.estimatedRevenueChange));
 }
 
-// ─── CO-OCCURRENCE / ASSOCIATION ANALYSIS ─────────────────────────
+// ─── CO-OCCURRENCE / COMBO ANALYSIS ───────────────────────────────
 
-interface CoOccurrence {
-    itemA: number;
-    itemB: number;
-    count: number;
-}
+interface CoOccurrence { itemA: number; itemB: number; count: number; }
 
 function buildCoOccurrenceMatrix(orders: Order[]): CoOccurrence[] {
     const matrix: Map<string, number> = new Map();
-
     for (const order of orders) {
         const uniqueItems = Array.from(new Set(order.items.map((i) => i.menuItemId)));
-        // Generate all pairs
         for (let i = 0; i < uniqueItems.length; i++) {
             for (let j = i + 1; j < uniqueItems.length; j++) {
                 const key = `${Math.min(uniqueItems[i], uniqueItems[j])}-${Math.max(uniqueItems[i], uniqueItems[j])}`;
@@ -119,7 +217,6 @@ function buildCoOccurrenceMatrix(orders: Order[]): CoOccurrence[] {
             }
         }
     }
-
     return Array.from(matrix.entries()).map(([key, count]) => {
         const [a, b] = key.split("-").map(Number);
         return { itemA: a, itemB: b, count };
@@ -130,17 +227,10 @@ export function generateComboRecommendations(
     menuItems: MenuItem[],
     orders: Order[]
 ): ComboRecommendation[] {
-    if (orders.length < 2) {
-        // Not enough data — return seed combos based on category logic
-        return generateSeedCombos(menuItems);
-    }
-
+    if (orders.length < 2) return generateSeedCombos(menuItems, orders.length);
     const coOccurrences = buildCoOccurrenceMatrix(orders);
     const totalOrders = orders.length;
-
-    // Sort by frequency
     const sorted = coOccurrences.sort((a, b) => b.count - a.count);
-
     const combos: ComboRecommendation[] = [];
     const usedPairs = new Set<string>();
 
@@ -148,241 +238,233 @@ export function generateComboRecommendations(
         const key = `${pair.itemA}-${pair.itemB}`;
         if (usedPairs.has(key)) continue;
         usedPairs.add(key);
-
         const itemA = menuItems.find((m) => m.id === pair.itemA);
         const itemB = menuItems.find((m) => m.id === pair.itemB);
         if (!itemA || !itemB) continue;
 
-        // Try to find a third item that pairs well with either
-        const thirdItem = findThirdItem(pair.itemA, pair.itemB, sorted, menuItems, usedPairs);
-
+        const thirdItem = findThirdItem(pair.itemA, pair.itemB, sorted, menuItems);
         const comboItems = thirdItem ? [itemA, itemB, thirdItem] : [itemA, itemB];
         const individualTotal = comboItems.reduce((s, i) => s + i.price, 0);
-        const discount = Math.round(individualTotal * 0.1); // 10% combo discount
+        const discount = Math.round(individualTotal * 0.1);
         const suggestedPrice = individualTotal - discount;
-        const confidence = Math.round((pair.count / totalOrders) * 100);
+        const coOccPct = Math.round((pair.count / totalOrders) * 100);
+
+        const freqA = getOrderCountForItem(itemA.id, orders);
+        const freqB = getOrderCountForItem(itemB.id, orders);
+        const coOccStrength = Math.min(coOccPct * 2, 40);
+        const sampleStrength = Math.min((totalOrders / 10) * 20, 30);
+        const pairStrength = Math.min(pair.count * 10, 25);
+        const confidence = clampConfidence(coOccStrength + sampleStrength + pairStrength + 5);
+        const impactLevel: ImpactLevel = pair.count >= 3 ? "HIGH" : pair.count >= 2 ? "MEDIUM" : "LOW";
+        const aovIncrease = Math.round((discount / (individualTotal - discount)) * 100);
+
+        const reasoning: string[] = [
+            `${itemA.name} appears ${freqA} times (${Math.round((freqA / totalOrders) * 100)}% frequency).`,
+            `${itemB.name} appears ${freqB} times (${Math.round((freqB / totalOrders) * 100)}% frequency).`,
+            `Co-occurrence: ${pair.count}/${totalOrders} orders (${coOccPct}%).`,
+        ];
+        if (thirdItem) reasoning.push(`${thirdItem.name} frequently pairs with both items.`);
+        reasoning.push(`Combo at ₹${suggestedPrice} = ${Math.round(((individualTotal - suggestedPrice) / individualTotal) * 100)}% discount.`);
 
         combos.push({
-            items: comboItems,
-            coOccurrenceCount: pair.count,
-            totalOrders,
-            confidence: Math.min(confidence, 95),
-            suggestedPrice,
-            individualTotal,
-            aovIncrease: Math.round((discount / (individualTotal - discount)) * 100),
-            reason: `Ordered together in ${pair.count} out of ${totalOrders} orders (${confidence}% co-occurrence). Bundling at ₹${suggestedPrice} creates a ${Math.round(((individualTotal - suggestedPrice) / individualTotal) * 100)}% perceived discount.`,
+            items: comboItems, coOccurrenceCount: pair.count, totalOrders, confidence, suggestedPrice, individualTotal, aovIncrease,
+            reason: `Ordered together ${pair.count}/${totalOrders} times (${coOccPct}%). Bundle at ₹${suggestedPrice}.`,
+            impactLevel, reasoning, impactedMetrics: ["Average Order Value", "Revenue", "Customer Satisfaction"],
+            estimatedMonthlyImpact: Math.round(suggestedPrice * pair.count * 4.3 * 0.15),
         });
     }
-
-    // If we got data-driven combos, return them; otherwise fall back to seed
-    return combos.length > 0 ? combos.slice(0, 4) : generateSeedCombos(menuItems);
+    return combos.length > 0 ? combos.slice(0, 4) : generateSeedCombos(menuItems, totalOrders);
 }
 
-function findThirdItem(
-    idA: number,
-    idB: number,
-    coOccurrences: CoOccurrence[],
-    menuItems: MenuItem[],
-    usedPairs: Set<string>
-): MenuItem | null {
-    // Find items that pair with both A and B
-    const pairsWithA = coOccurrences.filter(
-        (p) => (p.itemA === idA || p.itemB === idA) && p.itemA !== idB && p.itemB !== idB
-    );
-    const pairsWithB = coOccurrences.filter(
-        (p) => (p.itemA === idB || p.itemB === idB) && p.itemA !== idA && p.itemB !== idA
-    );
-
+function findThirdItem(idA: number, idB: number, coOccurrences: CoOccurrence[], menuItems: MenuItem[]): MenuItem | null {
     const candidates = new Map<number, number>();
-    for (const p of pairsWithA) {
-        const otherId = p.itemA === idA ? p.itemB : p.itemA;
-        candidates.set(otherId, (candidates.get(otherId) || 0) + p.count);
+    for (const p of coOccurrences) {
+        if (p.itemA === idA && p.itemB !== idB) candidates.set(p.itemB, (candidates.get(p.itemB) || 0) + p.count);
+        if (p.itemB === idA && p.itemA !== idB) candidates.set(p.itemA, (candidates.get(p.itemA) || 0) + p.count);
+        if (p.itemA === idB && p.itemB !== idA) candidates.set(p.itemB, (candidates.get(p.itemB) || 0) + p.count);
+        if (p.itemB === idB && p.itemA !== idA) candidates.set(p.itemA, (candidates.get(p.itemA) || 0) + p.count);
     }
-    for (const p of pairsWithB) {
-        const otherId = p.itemA === idB ? p.itemB : p.itemA;
-        candidates.set(otherId, (candidates.get(otherId) || 0) + p.count);
-    }
-
-    // Pick the best candidate
-    let bestId = -1;
-    let bestScore = 0;
-    for (const [id, score] of candidates) {
-        if (score > bestScore) {
-            bestScore = score;
-            bestId = id;
-        }
-    }
-
+    let bestId = -1; let bestScore = 0;
+    for (const [id, score] of candidates) { if (score > bestScore) { bestScore = score; bestId = id; } }
     return bestId > 0 ? menuItems.find((m) => m.id === bestId) || null : null;
 }
 
-function generateSeedCombos(menuItems: MenuItem[]): ComboRecommendation[] {
-    // Intelligent seed combos based on category diversity + margin
-    const byCategory = new Map<string, MenuItem[]>();
-    for (const item of menuItems) {
-        if (!byCategory.has(item.category)) byCategory.set(item.category, []);
-        byCategory.get(item.category)!.push(item);
-    }
-
+function generateSeedCombos(menuItems: MenuItem[], totalOrders: number): ComboRecommendation[] {
     const combos: ComboRecommendation[] = [];
-    const categories = Array.from(byCategory.keys());
-
-    // Create cross-category combos
-    if (categories.length >= 2) {
-        const mainItems = menuItems.filter(
-            (i) => i.category === "Main Course" || i.category === "Fast Food"
-        );
-        const sides = menuItems.filter(
-            (i) => i.category === "Snacks" || i.category === "Starters" || i.category === "Breads"
-        );
-        const drinks = menuItems.filter(
-            (i) => i.category === "Beverages" || i.category === "Desserts"
-        );
-
-        for (let i = 0; i < Math.min(mainItems.length, 4); i++) {
-            const main = mainItems[i];
-            const side = sides[i % sides.length];
-            const drink = drinks[i % drinks.length];
-            if (!main || !side || !drink) continue;
-            if (main.id === side?.id || main.id === drink?.id || side?.id === drink?.id) continue;
-
-            const items = [main, side, drink];
-            const individualTotal = items.reduce((s, it) => s + it.price, 0);
-            const suggestedPrice = Math.round((individualTotal * 0.88) / 5) * 5;
-
-            combos.push({
-                items,
-                coOccurrenceCount: 0,
-                totalOrders: 0,
-                confidence: 75 + Math.floor(Math.random() * 15),
-                suggestedPrice,
-                individualTotal,
-                aovIncrease: Math.round(
-                    ((individualTotal - suggestedPrice) / suggestedPrice) * 100
-                ),
-                reason: `Category-diverse combo combining ${main.category} + ${side.category} + ${drink.category}. Cross-category bundles historically increase AOV by 15-22%.`,
-            });
-        }
+    const mainItems = menuItems.filter((i) => i.category === "Main Course" || i.category === "Fast Food");
+    const sides = menuItems.filter((i) => i.category === "Snacks" || i.category === "Starters" || i.category === "Breads");
+    const drinks = menuItems.filter((i) => i.category === "Beverages" || i.category === "Desserts");
+    for (let i = 0; i < Math.min(mainItems.length, 4); i++) {
+        const main = mainItems[i]; const side = sides[i % sides.length]; const drink = drinks[i % drinks.length];
+        if (!main || !side || !drink || main.id === side?.id || main.id === drink?.id || side?.id === drink?.id) continue;
+        const items = [main, side, drink];
+        const individualTotal = items.reduce((s, it) => s + it.price, 0);
+        const suggestedPrice = Math.round((individualTotal * 0.88) / 5) * 5;
+        combos.push({
+            items, coOccurrenceCount: 0, totalOrders, confidence: 55 + Math.floor(Math.random() * 15),
+            suggestedPrice, individualTotal, aovIncrease: Math.round(((individualTotal - suggestedPrice) / suggestedPrice) * 100),
+            reason: `Category-diverse combo: ${main.category} + ${side.category} + ${drink.category}.`,
+            impactLevel: "MEDIUM",
+            reasoning: [`No co-occurrence data yet.`, `Based on category diversity analysis.`],
+            impactedMetrics: ["Average Order Value", "Revenue"],
+            estimatedMonthlyImpact: Math.round(suggestedPrice * 0.12 * 30),
+        });
     }
-
     return combos.slice(0, 4);
 }
 
-// ─── DYNAMIC AI INSIGHTS GENERATOR ────────────────────────────────
+// ─── DASHBOARD INSIGHTS (Channel-Aware) ───────────────────────────
 
 export function generateDashboardInsights(
     menuItems: MenuItem[],
-    orders: Order[]
+    orders: Order[],
+    commissions: ChannelCommission[] = []
 ): AIInsight[] {
     const insights: AIInsight[] = [];
     const totalRevenue = orders.reduce((s, o) => s + o.total, 0);
     const totalOrders = orders.length;
+    const avgOrders = menuItems.reduce((s, m) => s + getOrderCountForItem(m.id, orders), 0) / (menuItems.length || 1);
+    const avgCommission = commissions.filter((c) => c.channel !== "OFFLINE" && c.enabled).reduce((s, c) => s + c.commissionPct, 0) /
+        Math.max(commissions.filter((c) => c.channel !== "OFFLINE" && c.enabled).length, 1) || 22;
 
-    // 1. Hidden Stars — high margin, low orders
+    // 1. UNPROFITABLE SKU DETECTION (Online)
+    for (const item of menuItems) {
+        const onlineContribution = calculateOnlineContribution(item, avgCommission);
+        if (onlineContribution < 0) {
+            const onlineOrderCount = orders.filter((o) => o.channel !== "OFFLINE" && o.items.some((oi) => oi.menuItemId === item.id)).length;
+            const lossPerMonth = Math.round(Math.abs(onlineContribution) * Math.max(onlineOrderCount, 1) * 4.3);
+            insights.push({
+                type: "risk",
+                title: `🚨 Risk SKU: ${item.name}`,
+                description: `${item.name} loses ₹${Math.abs(onlineContribution).toFixed(0)} per online sale (price ₹${item.price}, commission ₹${Math.round(item.price * avgCommission / 100)}, cost ₹${item.cost}). ${onlineOrderCount > 0 ? `Currently ${onlineOrderCount} online orders.` : ""}`,
+                impact: `-₹${lossPerMonth}/month potential loss`,
+                priority: "high",
+                confidence: clampConfidence(75 + Math.min(totalOrders / 5, 15)),
+                impactLevel: "HIGH",
+                reasoning: [
+                    `Selling price: ₹${item.price}.`,
+                    `Commission (${avgCommission}%): ₹${Math.round(item.price * avgCommission / 100)}.`,
+                    `Net revenue: ₹${(item.price - item.price * avgCommission / 100).toFixed(0)}.`,
+                    `Food cost: ₹${item.cost}.`,
+                    `Contribution: ₹${onlineContribution.toFixed(0)} (NEGATIVE = loss per sale).`,
+                    `Action: Increase online price or remove from online platforms.`,
+                ],
+                impactedMetrics: ["Online Profitability", "Revenue Loss Prevention"],
+            });
+        }
+    }
+
+    // 2. Online vs Offline performance
+    const onlineOrders = orders.filter((o) => o.channel !== "OFFLINE");
+    const offlineOrders = orders.filter((o) => o.channel === "OFFLINE");
+    if (onlineOrders.length > 0 && offlineOrders.length > 0) {
+        const onlineRev = onlineOrders.reduce((s, o) => s + o.total, 0);
+        const offlineRev = offlineOrders.reduce((s, o) => s + o.total, 0);
+        const onlineAvgMargin = onlineOrders.reduce((s, o) => s + o.margin, 0) / onlineOrders.length;
+        const offlineAvgMargin = offlineOrders.reduce((s, o) => s + o.margin, 0) / offlineOrders.length;
+        const onlinePct = Math.round((onlineRev / totalRevenue) * 100);
+
+        insights.push({
+            type: "insight",
+            title: "Online vs Offline Split",
+            description: `${onlinePct}% revenue from online (${onlineOrders.length} orders, avg margin ${onlineAvgMargin.toFixed(0)}%) vs ${100 - onlinePct}% offline (${offlineOrders.length} orders, avg margin ${offlineAvgMargin.toFixed(0)}%). ${onlineAvgMargin < offlineAvgMargin ? "Online margins are lower due to commissions." : ""}`,
+            priority: "medium",
+            confidence: clampConfidence(60 + Math.min(totalOrders / 3, 25)),
+            impactLevel: Math.abs(onlineAvgMargin - offlineAvgMargin) > 15 ? "HIGH" : "MEDIUM",
+            reasoning: [
+                `Online: ${onlineOrders.length} orders, ₹${onlineRev} revenue, ${onlineAvgMargin.toFixed(1)}% avg margin.`,
+                `Offline: ${offlineOrders.length} orders, ₹${offlineRev} revenue, ${offlineAvgMargin.toFixed(1)}% avg margin.`,
+                `Margin gap: ${Math.abs(onlineAvgMargin - offlineAvgMargin).toFixed(1)}% — ${onlineAvgMargin < offlineAvgMargin ? "commission impact on online orders." : "online orders perform better."}`,
+            ],
+            impactedMetrics: ["Channel Profitability", "Revenue Distribution"],
+        });
+    }
+
+    // 3. Hidden Stars
     for (const item of menuItems) {
         const margin = calculateMargin(item);
         const orderCount = getOrderCountForItem(item.id, orders);
-        const avgOrders =
-            menuItems.reduce((s, m) => s + getOrderCountForItem(m.id, orders), 0) /
-            (menuItems.length || 1);
-
         if (margin > 55 && orderCount < avgOrders * 0.7) {
+            const potentialRevenue = Math.round(item.price * 0.15 * Math.max(avgOrders - orderCount, 5));
             insights.push({
                 type: "opportunity",
                 title: `Hidden Star: ${item.name}`,
-                description: `${item.name} has a ${margin.toFixed(0)}% margin but only ${orderCount} orders (${Math.round((orderCount / (avgOrders || 1)) * 100)}% of average). Promoting it as a combo could increase revenue by ₹${Math.round(item.price * 0.15 * (avgOrders - orderCount))}/week.`,
-                impact: `+₹${Math.round(item.price * 0.15 * Math.max(avgOrders - orderCount, 5))}/week`,
+                description: `${margin.toFixed(0)}% margin but only ${orderCount} orders. Promoting could add ₹${potentialRevenue}/week.`,
+                impact: `+₹${potentialRevenue}/week`,
                 priority: "high",
+                confidence: clampConfidence(Math.min(margin / 1.2, 40) + Math.min(totalOrders / 5, 30) + 15),
+                impactLevel: "HIGH",
+                reasoning: [
+                    `Offline margin: ${margin.toFixed(1)}% (above 55% threshold).`,
+                    `Online margin: ${calculateOnlineMargin(item, avgCommission).toFixed(1)}% after commission.`,
+                    `Order frequency: ${orderCount} (${Math.round((orderCount / (avgOrders || 1)) * 100)}% of average).`,
+                ],
+                impactedMetrics: ["Item Visibility", "Revenue", "Menu Utilization"],
             });
         }
     }
 
-    // 2. Low margin warnings
+    // 4. Low margin warnings
     for (const item of menuItems) {
         const margin = calculateMargin(item);
         const orderCount = getOrderCountForItem(item.id, orders);
-
         if (margin < 40 && orderCount > 0) {
             insights.push({
                 type: "warning",
-                title: `Low Margin Alert: ${item.name}`,
-                description: `${item.name} has only ${margin.toFixed(0)}% margin with ${orderCount} orders. Each sale contributes just ₹${(item.price - item.cost).toFixed(0)} profit. Consider renegotiating supplier costs or increasing price.`,
-                impact: `₹${(item.price - item.cost).toFixed(0)}/order profit`,
+                title: `Low Margin: ${item.name}`,
+                description: `${margin.toFixed(0)}% offline margin (₹${(item.price - item.cost)} profit). Online margin: ${calculateOnlineMargin(item, avgCommission).toFixed(0)}%.`,
+                impact: `₹${item.price - item.cost}/order`,
                 priority: margin < 35 ? "high" : "medium",
+                confidence: clampConfidence(Math.min((40 - margin) * 2, 30) + Math.min(totalOrders / 5, 30) + 20),
+                impactLevel: margin < 35 ? "HIGH" : "MEDIUM",
+                reasoning: [
+                    `Offline: ₹${item.price} − ₹${item.cost} = ₹${item.price - item.cost} (${margin.toFixed(1)}%).`,
+                    `Online: ₹${item.price} − ₹${Math.round(item.price * avgCommission / 100)} commission − ₹${item.cost} = ₹${calculateOnlineContribution(item, avgCommission).toFixed(0)}.`,
+                ],
+                impactedMetrics: ["Profit Margin", "Revenue Efficiency"],
             });
         }
     }
 
-    // 3. Weekend vs weekday pattern (if we have date data)
-    const weekendOrders = orders.filter((o) => {
-        const day = new Date(o.timestamp).getDay();
-        return day === 0 || day === 6;
-    });
-    const weekdayOrders = orders.filter((o) => {
-        const day = new Date(o.timestamp).getDay();
-        return day >= 1 && day <= 5;
-    });
-
-    if (weekendOrders.length > 0 && weekdayOrders.length > 0) {
-        const weekendAvg = weekendOrders.reduce((s, o) => s + o.total, 0) / weekendOrders.length;
-        const weekdayAvg = weekdayOrders.reduce((s, o) => s + o.total, 0) / weekdayOrders.length;
-        const diff = ((weekendAvg - weekdayAvg) / weekdayAvg) * 100;
-
-        if (Math.abs(diff) > 10) {
-            insights.push({
-                type: "insight",
-                title: diff > 0 ? "Weekend Revenue Spike" : "Weekday Opportunity",
-                description:
-                    diff > 0
-                        ? `Weekend orders average ₹${Math.round(weekendAvg)} vs weekday ₹${Math.round(weekdayAvg)} (+${Math.round(diff)}%). Consider premium weekend-exclusive items to maximize this trend.`
-                        : `Weekday orders outperform weekends. Consider weekend promotions to balance demand.`,
-                priority: "medium",
-            });
-        }
-    }
-
-    // 4. Top concentration risk
+    // 5. Revenue concentration
     if (totalOrders > 3) {
         const itemRevenue = menuItems.map((item) => ({
             name: item.name,
-            revenue: orders.reduce((s, o) => {
-                const oi = o.items.find((i) => i.menuItemId === item.id);
-                return s + (oi ? oi.price * oi.qty : 0);
-            }, 0),
-        }));
-        itemRevenue.sort((a, b) => b.revenue - a.revenue);
+            revenue: orders.reduce((s, o) => { const oi = o.items.find((i) => i.menuItemId === item.id); return s + (oi ? oi.price * oi.qty : 0); }, 0),
+        })).sort((a, b) => b.revenue - a.revenue);
         const top3Revenue = itemRevenue.slice(0, 3).reduce((s, i) => s + i.revenue, 0);
         const top3Pct = totalRevenue > 0 ? (top3Revenue / totalRevenue) * 100 : 0;
-
         if (top3Pct > 50) {
             insights.push({
                 type: "warning",
                 title: "Revenue Concentration Risk",
-                description: `Top 3 items (${itemRevenue.slice(0, 3).map((i) => i.name).join(", ")}) contribute ${Math.round(top3Pct)}% of revenue. Diversify promotions to reduce dependency.`,
+                description: `Top 3 items contribute ${Math.round(top3Pct)}% of revenue. Diversify to reduce dependency.`,
                 priority: "medium",
+                confidence: clampConfidence(60 + Math.min(totalOrders / 3, 25)),
+                impactLevel: top3Pct > 65 ? "HIGH" : "MEDIUM",
+                reasoning: itemRevenue.slice(0, 3).map((i) => `${i.name}: ₹${i.revenue}`),
+                impactedMetrics: ["Revenue Stability", "Menu Diversification"],
             });
         }
     }
 
-    // 5. AOV insight
+    // 6. AOV Forecast
     if (totalOrders > 0) {
         const aov = totalRevenue / totalOrders;
+        const uplift = Math.round(aov * 0.18 * totalOrders);
         insights.push({
             type: "forecast",
             title: "Revenue Forecast",
-            description: `Current AOV is ₹${Math.round(aov)}. Implementing combo recommendations could increase AOV by 15-22%, generating an estimated additional ₹${Math.round(aov * 0.18 * totalOrders)}/month.`,
-            impact: `+₹${Math.round(aov * 0.18 * totalOrders)}/month potential`,
+            description: `AOV ₹${Math.round(aov)}. Combos + upsell could add ~₹${uplift}/month (+18%).`,
+            impact: `+₹${uplift}/month`,
             priority: "high",
-        });
-    }
-
-    // Always include at least a few default insights
-    if (insights.length < 3) {
-        insights.push({
-            type: "insight",
-            title: "Category Balance",
-            description: "Analyze menu distribution across categories. A healthy menu has no single category exceeding 40% of total items.",
-            priority: "low",
+            confidence: clampConfidence(50 + Math.min(totalOrders / 2, 30)),
+            impactLevel: uplift > 5000 ? "HIGH" : "MEDIUM",
+            reasoning: [
+                `Current AOV: ₹${Math.round(aov)} across ${totalOrders} orders.`,
+                `Projected combo uplift: 15-22% based on industry benchmarks.`,
+            ],
+            impactedMetrics: ["Average Order Value", "Monthly Revenue"],
         });
     }
 
@@ -394,14 +476,12 @@ export function generateDashboardInsights(
 
 // ─── VOICE ORDER NLP PARSER ───────────────────────────────────────
 
-// Number word mapping (English + Hindi)
 const numberWords: Record<string, number> = {
     one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
     ek: 1, do: 2, teen: 3, char: 4, paanch: 5, cheh: 6, saat: 7, aath: 8, nau: 9, das: 10,
     a: 1, an: 1,
 };
 
-// Hindi connecting words to strip
 const stopWords = [
     "aur", "and", "or", "please", "bhai", "yaar", "dena", "de", "do",
     "chahiye", "lao", "laga", "lagao", "with", "mein", "me", "ka", "ke", "ki",
@@ -410,34 +490,20 @@ const stopWords = [
 ];
 
 function normalizeText(text: string): string {
-    return text
-        .toLowerCase()
-        .replace(/[.,!?;:'"]/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
+    return text.toLowerCase().replace(/[.,!?;:'"]/g, "").replace(/\s+/g, " ").trim();
 }
 
 function fuzzyMatch(input: string, target: string): number {
-    const inputLower = input.toLowerCase();
-    const targetLower = target.toLowerCase();
-
+    const inputLower = input.toLowerCase(); const targetLower = target.toLowerCase();
     if (inputLower === targetLower) return 1;
     if (targetLower.includes(inputLower) || inputLower.includes(targetLower)) return 0.8;
-
-    // Check each word of input against target
-    const inputWords = inputLower.split(" ");
-    const targetWords = targetLower.split(" ");
-
+    const inputWords = inputLower.split(" "); const targetWords = targetLower.split(" ");
     let matchedWords = 0;
     for (const iw of inputWords) {
         for (const tw of targetWords) {
-            if (iw === tw || (iw.length > 3 && tw.startsWith(iw)) || (tw.length > 3 && iw.startsWith(tw))) {
-                matchedWords++;
-                break;
-            }
+            if (iw === tw || (iw.length > 3 && tw.startsWith(iw)) || (tw.length > 3 && iw.startsWith(tw))) { matchedWords++; break; }
         }
     }
-
     return matchedWords / Math.max(inputWords.length, targetWords.length);
 }
 
@@ -446,74 +512,35 @@ export function parseVoiceOrder(
     menuItems: MenuItem[]
 ): { items: { menuItem: MenuItem; qty: number }[]; unmatched: string[] } {
     const normalized = normalizeText(transcript);
-
-    // Split by common delimiters
-    const segments = normalized
-        .split(/\b(?:and|aur|or|plus|also|,)\b/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-
+    const segments = normalized.split(/\b(?:and|aur|or|plus|also|,)\b/).map((s) => s.trim()).filter(Boolean);
     const results: { menuItem: MenuItem; qty: number }[] = [];
     const unmatched: string[] = [];
 
     for (let segment of segments) {
-        // Remove stop words
         const words = segment.split(" ").filter((w) => !stopWords.includes(w));
         segment = words.join(" ");
-
         if (!segment.trim()) continue;
-
-        // Extract quantity
         let qty = 1;
         const firstWord = words[0];
-
-        // Check for number
-        if (firstWord && /^\d+$/.test(firstWord)) {
-            qty = parseInt(firstWord);
-            segment = words.slice(1).join(" ");
-        } else if (firstWord && numberWords[firstWord] !== undefined) {
-            qty = numberWords[firstWord];
-            segment = words.slice(1).join(" ");
-        }
-
+        if (firstWord && /^\d+$/.test(firstWord)) { qty = parseInt(firstWord); segment = words.slice(1).join(" "); }
+        else if (firstWord && numberWords[firstWord] !== undefined) { qty = numberWords[firstWord]; segment = words.slice(1).join(" "); }
         if (!segment.trim()) continue;
 
-        // Match against menu items (including aliases)
-        let bestMatch: MenuItem | null = null;
-        let bestScore = 0;
-
+        let bestMatch: MenuItem | null = null; let bestScore = 0;
         for (const item of menuItems) {
-            // Check main name
             const nameScore = fuzzyMatch(segment, item.name);
-            if (nameScore > bestScore) {
-                bestScore = nameScore;
-                bestMatch = item;
-            }
-
-            // Check aliases (Hindi names)
+            if (nameScore > bestScore) { bestScore = nameScore; bestMatch = item; }
             if (item.aliases) {
                 for (const alias of item.aliases) {
                     const aliasScore = fuzzyMatch(segment, alias);
-                    if (aliasScore > bestScore) {
-                        bestScore = aliasScore;
-                        bestMatch = item;
-                    }
+                    if (aliasScore > bestScore) { bestScore = aliasScore; bestMatch = item; }
                 }
             }
         }
-
         if (bestMatch && bestScore >= 0.5) {
-            // Check if this item already exists in results
             const existing = results.find((r) => r.menuItem.id === bestMatch!.id);
-            if (existing) {
-                existing.qty += qty;
-            } else {
-                results.push({ menuItem: bestMatch, qty });
-            }
-        } else {
-            unmatched.push(segment);
-        }
+            if (existing) existing.qty += qty; else results.push({ menuItem: bestMatch, qty });
+        } else { unmatched.push(segment); }
     }
-
     return { items: results, unmatched };
 }
