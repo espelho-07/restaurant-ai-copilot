@@ -13,6 +13,7 @@ import VoiceCopilot from "./pages/VoiceCopilot";
 import Insights from "./pages/Insights";
 import RestaurantSetup from "./pages/RestaurantSetup";
 import OrdersSimulation from "./pages/OrdersSimulation";
+import Orders from "./pages/Orders";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -33,7 +34,8 @@ const App = () => (
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/setup" element={<RestaurantSetup />} />
               <Route path="/menu" element={<MenuIntelligence />} />
-              <Route path="/orders" element={<OrdersSimulation />} />
+              <Route path="/pos" element={<OrdersSimulation />} />
+              <Route path="/orders" element={<Orders />} />
               <Route path="/combos" element={<ComboEngine />} />
               <Route path="/voice" element={<VoiceCopilot />} />
               <Route path="/insights" element={<Insights />} />

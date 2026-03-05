@@ -291,25 +291,61 @@ function findThirdItem(idA: number, idB: number, coOccurrences: CoOccurrence[], 
 
 function generateSeedCombos(menuItems: MenuItem[], totalOrders: number): ComboRecommendation[] {
     const combos: ComboRecommendation[] = [];
-    const mainItems = menuItems.filter((i) => i.category === "Main Course" || i.category === "Fast Food");
-    const sides = menuItems.filter((i) => i.category === "Snacks" || i.category === "Starters" || i.category === "Breads");
-    const drinks = menuItems.filter((i) => i.category === "Beverages" || i.category === "Desserts");
-    for (let i = 0; i < Math.min(mainItems.length, 4); i++) {
-        const main = mainItems[i]; const side = sides[i % sides.length]; const drink = drinks[i % drinks.length];
-        if (!main || !side || !drink || main.id === side?.id || main.id === drink?.id || side?.id === drink?.id) continue;
-        const items = [main, side, drink];
-        const individualTotal = items.reduce((s, it) => s + it.price, 0);
-        const suggestedPrice = Math.round((individualTotal * 0.88) / 5) * 5;
+
+    // Group items by broad types for logical pairing
+    const mains = menuItems.filter(i => ["Main Course", "Pizza", "Biryani"].includes(i.category));
+    const fastFood = menuItems.filter(i => ["Fast Food", "Burger", "Sandwich"].includes(i.category));
+    const breads = menuItems.filter(i => ["Breads", "Roti", "Naan"].includes(i.category));
+    const starters = menuItems.filter(i => ["Starters", "Snacks", "Fries"].includes(i.category));
+    const beverages = menuItems.filter(i => ["Beverages", "Drinks", "Shakes"].includes(i.category));
+    const desserts = menuItems.filter(i => ["Desserts", "Sweets", "Ice Cream"].includes(i.category));
+
+    const templates = [
+        { name: "Classic Meal", items: [mains[0], breads[0], beverages[0]] },
+        { name: "Snack & Drink", items: [fastFood[0], starters[0], beverages[0]] },
+        { name: "Quick Drink Combo", items: [fastFood[1] || fastFood[0], beverages[1] || beverages[0]] },
+        { name: "Sweet Ending", items: [mains[1] || mains[0], desserts[0]] },
+        { name: "Starter & Main", items: [starters[0], mains[0]] }
+    ];
+
+    for (const t of templates) {
+        // Filter out nulls and deduplicate to ensure valid combinations
+        const validItems = Array.from(new Set(t.items.filter(Boolean)));
+        if (validItems.length < 2) continue; // Need at least 2 items for a combo
+
+        const individualTotal = validItems.reduce((s, it) => s + it.price, 0);
+        const suggestedPrice = Math.round((individualTotal * 0.88) / 5) * 5; // 12% discount rounded to 5
+
         combos.push({
-            items, coOccurrenceCount: 0, totalOrders, confidence: 55 + Math.floor(Math.random() * 15),
-            suggestedPrice, individualTotal, aovIncrease: Math.round(((individualTotal - suggestedPrice) / suggestedPrice) * 100),
-            reason: `Category-diverse combo: ${main.category} + ${side.category} + ${drink.category}.`,
+            items: validItems,
+            coOccurrenceCount: 0,
+            totalOrders,
+            confidence: 55 + Math.floor(Math.random() * 15),
+            suggestedPrice,
+            individualTotal,
+            aovIncrease: Math.round(((individualTotal - suggestedPrice) / suggestedPrice) * 100),
+            reason: `Curated ${t.name}: ${validItems.map(i => i.name).join(" + ")}.`,
             impactLevel: "MEDIUM",
-            reasoning: [`No co-occurrence data yet.`, `Based on category diversity analysis.`],
+            reasoning: [`No co-occurrence data yet.`, `Based on logical category pairing (${t.name}).`],
             impactedMetrics: ["Average Order Value", "Revenue"],
             estimatedMonthlyImpact: Math.round(suggestedPrice * 0.12 * 30),
         });
+
+        if (combos.length >= 4) break;
     }
+
+    // Fallback if templates fail (e.g. very limited menu)
+    if (combos.length === 0 && menuItems.length >= 2) {
+        const fallbackItems = menuItems.slice(0, 2);
+        const total = fallbackItems[0].price + fallbackItems[1].price;
+        combos.push({
+            items: fallbackItems, coOccurrenceCount: 0, totalOrders, confidence: 50,
+            suggestedPrice: Math.round((total * 0.9) / 5) * 5, individualTotal: total, aovIncrease: 10,
+            reason: `Basic Combo: ${fallbackItems.map(i => i.name).join(' + ')}`,
+            impactLevel: "LOW", reasoning: ["Basic fallback combo generated due to limited menu categories."], impactedMetrics: ["AOV"], estimatedMonthlyImpact: 0
+        });
+    }
+
     return combos.slice(0, 4);
 }
 

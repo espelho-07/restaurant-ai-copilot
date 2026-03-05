@@ -89,9 +89,13 @@ const Dashboard = () => {
   }, [menuItems, orders]);
 
   const forecastData = useMemo(() => {
-    const base = avgOrderValue * 30;
-    return Array.from({ length: 7 }, (_, i) => ({ week: `Week ${i + 1}`, withoutAI: Math.round(base * (1 + Math.random() * 0.03)), withAI: Math.round(base * (1 + (i + 1) * 0.04 + Math.random() * 0.02)) }));
-  }, [avgOrderValue]);
+    const base = avgOrderValue * (totalOrders || 1);
+    return Array.from({ length: 7 }, (_, i) => ({
+      week: `Week ${i + 1}`,
+      withoutAI: Math.round(base * (1 + (i * 0.01))),
+      withAI: Math.round(base * (1 + (i + 1) * 0.04))
+    }));
+  }, [avgOrderValue, totalOrders]);
 
   const popularityData = useMemo(() => menuItems.map((item) => ({ item: item.name, orders: getOrderCountForItem(item.id, orders) })).sort((a, b) => b.orders - a.orders).slice(0, 6), [menuItems, orders]);
 
@@ -104,12 +108,12 @@ const Dashboard = () => {
   const salesData = useMemo(() => {
     const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; const daySales = new Map<string, number>(); days.forEach((d) => daySales.set(d, 0));
     for (const order of orders) { const day = days[new Date(order.timestamp).getDay() === 0 ? 6 : new Date(order.timestamp).getDay() - 1]; daySales.set(day, (daySales.get(day) || 0) + order.total); }
-    return days.map((day) => ({ day, revenue: daySales.get(day) || Math.round(3000 + Math.random() * 4000) }));
+    return days.map((day) => ({ day, revenue: daySales.get(day) || 0 }));
   }, [orders]);
 
   const metrics = [
-    { label: "Total Revenue", value: `₹${(totalRevenue / 1000).toFixed(1)}K`, change: "+12.5%", icon: DollarSign },
-    { label: "Avg Order Value", value: `₹${Math.round(avgOrderValue)}`, change: "+8.2%", icon: TrendingUp },
+    { label: "Total Revenue", value: `₹${totalRevenue >= 1000 ? (totalRevenue / 1000).toFixed(1) + 'K' : totalRevenue.toFixed(0)}`, change: totalOrders > 0 ? "+12.5%" : "0%", icon: DollarSign },
+    { label: "Avg Order Value", value: `₹${Math.round(avgOrderValue)}`, change: totalOrders > 0 ? "+8.2%" : "0%", icon: TrendingUp },
     { label: "Top Selling Item", value: topSeller.name, sub: `${topSeller.count} orders`, icon: Star },
     { label: "Hidden Star", value: hiddenStar.name, sub: `${hiddenStar.margin}% margin`, icon: Eye },
   ];
@@ -129,13 +133,26 @@ const Dashboard = () => {
     };
   }), [priceRecs]);
 
+  // Use actual orders for live feed if they exist, otherwise fallback cleanly
   useEffect(() => {
-    const now = new Date(); const t = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-    setLiveOrders([{ id: 1000, time: t, ...liveOrderPool[0] }]);
-    let counter = 1001;
-    const interval = setInterval(() => { const d = liveOrderPool[Math.floor(Math.random() * liveOrderPool.length)]; const now = new Date(); const t = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }); counter++; setLiveOrders((prev) => [{ id: counter, time: t, ...d }, ...prev].slice(0, 5)); }, 4000);
-    return () => clearInterval(interval);
-  }, []);
+    if (orders.length > 0) {
+      const recent = [...orders].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 5);
+      const mapped = recent.map((o, i) => ({
+        id: i,
+        time: new Date(o.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+        items: o.items.map(it => `${it.name} x${it.qty}`).join(", "),
+        total: o.total,
+        margin: o.margin
+      }));
+      setLiveOrders(mapped);
+    } else {
+      const now = new Date(); const t = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+      setLiveOrders([{ id: 1000, time: t, ...liveOrderPool[0] }]);
+      let counter = 1001;
+      const interval = setInterval(() => { const d = liveOrderPool[Math.floor(Math.random() * liveOrderPool.length)]; const now = new Date(); const t = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }); counter++; setLiveOrders((prev) => [{ id: counter, time: t, ...d }, ...prev].slice(0, 5)); }, 4000);
+      return () => clearInterval(interval);
+    }
+  }, [orders]);
 
   // ─── SETUP GUARD ────────────────────────────────────────────
   const isSetupDone = menuItems.length > 0;
