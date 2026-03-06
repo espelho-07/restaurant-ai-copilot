@@ -401,7 +401,7 @@ const RestaurantSetup = () => {
                   return (
                     <div key={c.label} className="flex items-center justify-between rounded-xl border border-border bg-secondary/20 p-3">
                       <div className="flex items-center gap-3">
-                        <input type="checkbox" checked={c.enabled} onChange={(e) => updateCommission(c.channel, { enabled: e.target.checked })} className="h-4 w-4 rounded border-border text-primary focus:ring-primary/20 accent-primary" />
+                        <input type="checkbox" checked={c.enabled} onChange={(e) => updateCommission(c.channel, { enabled: e.target.checked, label: c.label })} className="h-4 w-4 rounded border-border text-primary focus:ring-primary/20 accent-primary" />
                         <span className="text-sm font-semibold">{c.label}</span>
                         {isCustom && <span className="text-[9px] rounded-full bg-accent/10 px-2 py-0.5 font-bold text-accent">Custom</span>}
                       </div>
@@ -409,7 +409,7 @@ const RestaurantSetup = () => {
                         {c.enabled && (
                           <>
                             <span className="text-xs text-muted-foreground">Commission %</span>
-                            <input type="number" value={c.commissionPct} onChange={(e) => updateCommission(c.channel, { commissionPct: Number(e.target.value) })} className="w-16 rounded-lg border border-border bg-card py-1 px-2 text-sm font-semibold text-center outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
+                            <input type="number" value={c.commissionPct} onChange={(e) => updateCommission(c.channel, { commissionPct: Number(e.target.value), label: c.label })} className="w-16 rounded-lg border border-border bg-card py-1 px-2 text-sm font-semibold text-center outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
                           </>
                         )}
                         {isCustom && (
@@ -935,3 +935,4 @@ const RestaurantSetup = () => {
 };
 
 export default RestaurantSetup;
+

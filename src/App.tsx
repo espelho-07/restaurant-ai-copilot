@@ -2,9 +2,9 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { RestaurantDataProvider } from "@/lib/restaurantData";
-import { AuthProvider } from "@/components/AuthProvider";
+import { AuthProvider, ProtectedRoute, PublicRoute } from "@/components/AuthProvider";
 import Index from "./pages/Index";
 import Dashboard from "./pages/Dashboard";
 import MenuIntelligence from "./pages/MenuIntelligence";
@@ -24,8 +24,17 @@ import LowMarginRisk from "./pages/LowMarginRisk";
 import SmartUpsell from "./pages/SmartUpsell";
 import PriceOptimization from "./pages/PriceOptimization";
 import PlatformSettings from "./pages/PlatformSettings";
+import Login from "./pages/Login";
 
 const queryClient = new QueryClient();
+
+const ProtectedPage = ({ children }: { children: React.ReactNode }) => (
+  <ProtectedRoute>{children}</ProtectedRoute>
+);
+
+const PublicPage = ({ children }: { children: React.ReactNode }) => (
+  <PublicRoute>{children}</PublicRoute>
+);
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -36,32 +45,28 @@ const App = () => (
           <Sonner />
           <BrowserRouter>
             <Routes>
-              {/* Landing page */}
               <Route path="/" element={<Index />} />
 
-              {/* All app pages — no auth required */}
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/setup" element={<RestaurantSetup />} />
-              <Route path="/menu" element={<MenuIntelligence />} />
-              <Route path="/pos" element={<OrdersSimulation />} />
-              <Route path="/orders" element={<Orders />} />
-              <Route path="/combos" element={<ComboEngine />} />
-              <Route path="/voice" element={<VoiceCopilot />} />
-              <Route path="/insights" element={<Insights />} />
+              <Route path="/login" element={<PublicPage><Login /></PublicPage>} />
 
-              {/* AI Module Detail Pages */}
-              <Route path="/contribution-margin" element={<ContributionMargin />} />
-              <Route path="/item-profitability" element={<ItemProfitability />} />
-              <Route path="/sales-velocity" element={<SalesVelocity />} />
-              <Route path="/hidden-stars" element={<HiddenStars />} />
-              <Route path="/low-margin-risk" element={<LowMarginRisk />} />
-              <Route path="/smart-upsell" element={<SmartUpsell />} />
-              <Route path="/price-optimization" element={<PriceOptimization />} />
-              <Route path="/platform-settings" element={<PlatformSettings />} />
-              <Route path="/coming-soon" element={<ComingSoon />} />
+              <Route path="/dashboard" element={<ProtectedPage><Dashboard /></ProtectedPage>} />
+              <Route path="/setup" element={<ProtectedPage><RestaurantSetup /></ProtectedPage>} />
+              <Route path="/menu" element={<ProtectedPage><MenuIntelligence /></ProtectedPage>} />
+              <Route path="/pos" element={<ProtectedPage><OrdersSimulation /></ProtectedPage>} />
+              <Route path="/orders" element={<ProtectedPage><Orders /></ProtectedPage>} />
+              <Route path="/combos" element={<ProtectedPage><ComboEngine /></ProtectedPage>} />
+              <Route path="/voice" element={<ProtectedPage><VoiceCopilot /></ProtectedPage>} />
+              <Route path="/insights" element={<ProtectedPage><Insights /></ProtectedPage>} />
 
-              {/* Legacy login route → redirect to dashboard */}
-              <Route path="/login" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/contribution-margin" element={<ProtectedPage><ContributionMargin /></ProtectedPage>} />
+              <Route path="/item-profitability" element={<ProtectedPage><ItemProfitability /></ProtectedPage>} />
+              <Route path="/sales-velocity" element={<ProtectedPage><SalesVelocity /></ProtectedPage>} />
+              <Route path="/hidden-stars" element={<ProtectedPage><HiddenStars /></ProtectedPage>} />
+              <Route path="/low-margin-risk" element={<ProtectedPage><LowMarginRisk /></ProtectedPage>} />
+              <Route path="/smart-upsell" element={<ProtectedPage><SmartUpsell /></ProtectedPage>} />
+              <Route path="/price-optimization" element={<ProtectedPage><PriceOptimization /></ProtectedPage>} />
+              <Route path="/platform-settings" element={<ProtectedPage><PlatformSettings /></ProtectedPage>} />
+              <Route path="/coming-soon" element={<ProtectedPage><ComingSoon /></ProtectedPage>} />
 
               <Route path="*" element={<NotFound />} />
             </Routes>

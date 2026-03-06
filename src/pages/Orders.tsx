@@ -11,6 +11,7 @@ const channelColors: Record<SalesChannel, string> = {
     SWIGGY: 'bg-orange-500/10 text-orange-600',
     OTHER: 'bg-blue-500/10 text-blue-600',
     OFFLINE: 'bg-primary/10 text-primary',
+    CALL: 'bg-emerald-500/10 text-emerald-600',
 };
 
 const channelLabels: Record<string, string> = {
@@ -19,6 +20,7 @@ const channelLabels: Record<string, string> = {
     ZOMATO: 'Zomato',
     SWIGGY: 'Swiggy',
     OTHER: 'Other',
+    CALL: 'Phone Call',
 };
 
 export default function Orders() {
@@ -51,7 +53,7 @@ export default function Orders() {
 
                 {/* Filters */}
                 <div className="flex flex-wrap gap-2 mb-6">
-                    {(['ALL', 'OFFLINE', 'ZOMATO', 'SWIGGY', 'OTHER'] as const).map(f => (
+                    {(['ALL', 'OFFLINE', 'CALL', 'ZOMATO', 'SWIGGY', 'OTHER'] as const).map(f => (
                         <button
                             key={f}
                             onClick={() => setFilter(f as any)}
@@ -148,3 +150,4 @@ export default function Orders() {
         </div>
     );
 }
+

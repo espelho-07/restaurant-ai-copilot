@@ -1,29 +1,7 @@
-import { createContext, useContext } from "react";
-import { Session, User } from "@supabase/supabase-js";
-
-// ─── DEMO MODE ─────────────────────────────────────────────────────
-// Authentication is bypassed. A fake demo user is injected everywhere.
-// To re-enable auth, restore the original AuthProvider from git history.
-
-const DEMO_USER_ID = "00000000-0000-0000-0000-000000000001";
-const DEMO_EMAIL = "test123@gmail.com";
-
-const demoUser: User = {
-    id: DEMO_USER_ID,
-    email: DEMO_EMAIL,
-    app_metadata: {},
-    user_metadata: { full_name: "Demo User" },
-    aud: "authenticated",
-    created_at: new Date().toISOString(),
-} as User;
-
-const demoSession: Session = {
-    access_token: "demo-access-token",
-    refresh_token: "demo-refresh-token",
-    expires_in: 999999,
-    token_type: "bearer",
-    user: demoUser,
-} as Session;
+import { createContext, useContext, useEffect, useState } from "react";
+import { Navigate } from "react-router-dom";
+import type { Session, User } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
 
 interface AuthContextType {
     session: Session | null;
@@ -33,21 +11,45 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType>({
-    session: demoSession,
-    user: demoUser,
-    isLoading: false,
+    session: null,
+    user: null,
+    isLoading: true,
     signOut: async () => { },
 });
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-    // Demo mode: always provide a fake user, never loading
+    const [session, setSession] = useState<Session | null>(null);
+    const [user, setUser] = useState<User | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        let mounted = true;
+
+        supabase.auth.getSession().then(({ data }) => {
+            if (!mounted) return;
+            setSession(data.session ?? null);
+            setUser(data.session?.user ?? null);
+            setIsLoading(false);
+        });
+
+        const { data: subscription } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+            setSession(nextSession ?? null);
+            setUser(nextSession?.user ?? null);
+            setIsLoading(false);
+        });
+
+        return () => {
+            mounted = false;
+            subscription.subscription.unsubscribe();
+        };
+    }, []);
+
+    const signOut = async () => {
+        await supabase.auth.signOut();
+    };
+
     return (
-        <AuthContext.Provider value={{
-            session: demoSession,
-            user: demoUser,
-            isLoading: false,
-            signOut: async () => { console.log("Demo mode: sign out is disabled."); },
-        }}>
+        <AuthContext.Provider value={{ session, user, isLoading, signOut }}>
             {children}
         </AuthContext.Provider>
     );
@@ -55,11 +57,32 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
 export const useAuth = () => useContext(AuthContext);
 
-// Route guards are now pass-through — no redirects
 export const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+    const { user, isLoading } = useAuth();
+
+    if (isLoading) {
+        return (
+            <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
+                Loading...
+            </div>
+        );
+    }
+
+    if (!user) return <Navigate to="/login" replace />;
     return <>{children}</>;
 };
 
 export const PublicRoute = ({ children }: { children: React.ReactNode }) => {
+    const { user, isLoading } = useAuth();
+
+    if (isLoading) {
+        return (
+            <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
+                Loading...
+            </div>
+        );
+    }
+
+    if (user) return <Navigate to="/dashboard" replace />;
     return <>{children}</>;
 };

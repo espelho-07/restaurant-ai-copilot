@@ -1,38 +1,38 @@
-import { VercelRequest, VercelResponse } from '@vercel/node';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-
-const supabase = createClient(supabaseUrl, supabaseKey);
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { getAuthContext, parseNumber, supabase } from "../_lib/auth";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
-
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError || !user) return res.status(401).json({ error: 'Invalid token' });
-
-    const { data: restaurant } = await supabase.from('restaurants').select('id').eq('user_id', user.id).single();
-    if (!restaurant) return res.status(404).json({ error: 'Restaurant profile not found' });
+  try {
+    const { restaurantId } = await getAuthContext(req);
 
     const orders = req.body;
-    if (!Array.isArray(orders)) return res.status(400).json({ error: 'Expected array of orders' });
+    if (!Array.isArray(orders)) return res.status(400).json({ error: "Expected array of orders" });
 
-    // Body expects array of { order_id, item_name, quantity, channel, timestamp }
-    const formatted = orders.map((o: any) => ({
-        restaurant_id: restaurant.id,
-        order_id: o.order_id || o.id,
-        item_name: o.name || o.item_name,
-        quantity: o.qty || o.quantity,
-        channel: o.channel || 'OFFLINE',
-        timestamp: o.timestamp || new Date().toISOString()
-    }));
+    const formatted = orders
+      .map((order: any) => ({
+        restaurant_id: restaurantId,
+        order_id: String(order?.order_id || order?.id || `ORD-${Date.now()}`).trim(),
+        item_name: String(order?.name || order?.item_name || "").trim(),
+        quantity: Math.max(1, parseNumber(order?.qty ?? order?.quantity, 1)),
+        channel: String(order?.channel || "OFFLINE").toUpperCase(),
+        timestamp: String(order?.timestamp || new Date().toISOString()),
+      }))
+      .filter((row: any) => row.order_id.length > 0 && row.item_name.length > 0);
 
-    const { data, error } = await supabase.from('orders').insert(formatted).select();
+    if (formatted.length === 0) return res.status(400).json({ error: "No valid orders provided" });
+
+    const { data, error } = await supabase.from("orders").insert(formatted).select("id");
     if (error) return res.status(500).json({ error: error.message });
 
     return res.status(200).json({ count: data?.length || 0 });
+  } catch (error) {
+    if (error instanceof Error) {
+      const status = error.message === "Unauthorized" || error.message === "Invalid token" ? 401 : 500;
+      return res.status(status).json({ error: error.message });
+    }
+
+    return res.status(500).json({ error: "Unexpected server error" });
+  }
 }

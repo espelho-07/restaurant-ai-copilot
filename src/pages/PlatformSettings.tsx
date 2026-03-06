@@ -53,7 +53,7 @@ const PlatformSettings = () => {
                   <div className="flex items-center gap-3">
                     {/* Toggle */}
                     <button onClick={async () => {
-                      await updateCommission(c.channel, { enabled: !c.enabled });
+                      await updateCommission(c.channel, { enabled: !c.enabled, label: c.label });
                       toast.success(`${c.label} ${c.enabled ? "disabled" : "enabled"}`);
                     }} className="shrink-0">
                       {c.enabled
@@ -86,7 +86,7 @@ const PlatformSettings = () => {
                             <button onClick={async () => {
                               const pct = Number(editPct);
                               if (pct < 0 || pct > 100) { toast.error("0-100% only"); return; }
-                              await updateCommission(c.channel, { commissionPct: pct });
+                              await updateCommission(c.channel, { commissionPct: pct, label: c.label });
                               setEditingIdx(null);
                               toast.success(`${c.label} commission updated to ${pct}%`);
                             }} className="p-1 rounded-md text-success hover:bg-success/10 transition-all">
@@ -179,3 +179,4 @@ const PlatformSettings = () => {
 };
 
 export default PlatformSettings;
+

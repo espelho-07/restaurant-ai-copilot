@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
-import { BarChart3, Brain, Mic, Utensils, Layers, FileText, Home, Settings, ShoppingCart, PackageOpen, LayoutDashboard, Globe } from "lucide-react";
+import { Brain, Globe, Home, LayoutDashboard, Layers, PackageOpen, Settings, ShoppingCart, Utensils, FileText, LogOut } from "lucide-react";
 import { useRestaurantData } from "@/lib/restaurantData";
+import { useAuth } from "@/components/AuthProvider";
 
 const navItems = [
   { label: "Home", path: "/", icon: Home },
@@ -10,7 +11,7 @@ const navItems = [
   { label: "POS Simulator", path: "/pos", icon: ShoppingCart },
   { label: "Order Logs", path: "/orders", icon: PackageOpen },
   { label: "Combo Engine", path: "/combos", icon: Layers },
-  { label: "Voice Copilot", path: "/voice", icon: Mic },
+  { label: "Call Agent", path: "/voice", icon: ShoppingCart },
   { label: "Platform Settings", path: "/platform-settings", icon: Globe },
   { label: "Insights", path: "/insights", icon: FileText },
 ];
@@ -18,12 +19,14 @@ const navItems = [
 export function DashboardNav() {
   const location = useLocation();
   const { profile } = useRestaurantData();
+  const { user, signOut } = useAuth();
 
-  // Filter out the Setup menu item if the user has already completed the setup
-  const visibleNavItems = navItems.filter(item => {
-    if (item.path === '/setup' && profile.setupComplete) return false;
+  const visibleNavItems = navItems.filter((item) => {
+    if (item.path === "/setup" && profile.setupComplete) return false;
     return true;
   });
+
+  const badgeName = profile.name || user?.email?.split("@")[0] || "Guest";
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/10 bg-background/80 backdrop-blur-xl shadow-sm">
@@ -54,25 +57,30 @@ export function DashboardNav() {
         </nav>
 
         <div className="flex items-center gap-3">
-          {/* Restaurant Name Badge */}
-          {profile.name ? (
-            <div className="flex items-center gap-2 rounded-full border border-border/50 bg-secondary/30 pl-3 pr-1 py-1">
-              <span className="text-xs font-semibold text-foreground/80 hidden sm:inline-block">
-                {profile.name}
-              </span>
-              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold shadow-sm">
-                {profile.name.charAt(0).toUpperCase()}
-              </div>
+          <div className="flex items-center gap-2 rounded-full border border-border/50 bg-secondary/30 pl-3 pr-1 py-1">
+            <span className="text-xs font-semibold text-foreground/80 hidden sm:inline-block">
+              {badgeName}
+            </span>
+            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold shadow-sm">
+              {badgeName.charAt(0).toUpperCase()}
             </div>
+          </div>
+
+          {user ? (
+            <button
+              onClick={() => signOut()}
+              className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-secondary transition-colors"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              Log out
+            </button>
           ) : (
-            <div className="flex items-center gap-3">
-              <span className="rounded-full bg-accent/10 px-3 py-1 text-[10px] font-bold text-accent uppercase tracking-wider hidden sm:inline-block">
-                Demo Mode
-              </span>
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-accent-foreground text-xs font-bold">
-                D
-              </div>
-            </div>
+            <Link
+              to="/login"
+              className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-secondary transition-colors"
+            >
+              Sign in
+            </Link>
           )}
         </div>
       </div>

@@ -1,8 +1,9 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { MenuItem, Order, OrderItem, SalesChannel, ChannelCommission } from "./types";
 import type { POSConfig } from "./posService";
 import { defaultPOSConfig } from "./posService";
 import { toast } from "sonner";
+import { useAuth } from "@/components/AuthProvider";
 
 export interface RestaurantProfile {
     name: string;
@@ -14,15 +15,48 @@ export interface RestaurantProfile {
 }
 
 const defaultProfile: RestaurantProfile = {
-    name: "", location: "", cuisine: "", usesPOS: false, setupComplete: false,
+    name: "",
+    location: "",
+    cuisine: "",
+    usesPOS: false,
+    setupComplete: false,
+    posConfig: defaultPOSConfig,
 };
 
 const defaultCommissions: ChannelCommission[] = [
     { channel: "OFFLINE", label: "Offline / Dine-in", commissionPct: 0, enabled: true },
     { channel: "ZOMATO", label: "Zomato", commissionPct: 25, enabled: true },
     { channel: "SWIGGY", label: "Swiggy", commissionPct: 22, enabled: true },
+    { channel: "CALL", label: "Phone Orders", commissionPct: 0, enabled: true },
     { channel: "OTHER", label: "Other Online", commissionPct: 15, enabled: false },
 ];
+
+const channelNameMap: Record<string, SalesChannel> = {
+    OFFLINE: "OFFLINE",
+    DINEIN: "OFFLINE",
+    DINE_IN: "OFFLINE",
+    ZOMATO: "ZOMATO",
+    SWIGGY: "SWIGGY",
+    CALL: "CALL",
+    PHONE: "CALL",
+    OTHER: "OTHER",
+};
+
+const channelLabelMap: Record<SalesChannel, string> = {
+    OFFLINE: "Offline / Dine-in",
+    ZOMATO: "Zomato",
+    SWIGGY: "Swiggy",
+    CALL: "Phone Orders",
+    OTHER: "Other Online",
+};
+
+const builtInLabelMap: Record<string, SalesChannel> = {
+    "offline / dine-in": "OFFLINE",
+    "zomato": "ZOMATO",
+    "swiggy": "SWIGGY",
+    "phone orders": "CALL",
+    "other online": "OTHER",
+};
 
 interface RestaurantDataContextType {
     menuItems: MenuItem[];
@@ -49,144 +83,374 @@ interface RestaurantDataContextType {
 
 const RestaurantDataContext = createContext<RestaurantDataContextType | null>(null);
 
-const STORAGE_KEYS = {
-    PROFILE: "app_profile",
-    MENU: "app_menu",
-    ORDERS: "app_orders",
-    COMMISSIONS: "app_commissions",
-    POS_CONFIG: "app_pos_config",
-};
+function toNumber(value: unknown, fallback = 0): number {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeChannel(value: unknown): SalesChannel {
+    const raw = String(value || "OFFLINE").trim().toUpperCase();
+    return channelNameMap[raw] || "OTHER";
+}
+
+function mapMenuItem(row: any): MenuItem {
+    return {
+        id: toNumber(row?.id, Date.now()),
+        name: String(row?.name || row?.item_name || "").trim(),
+        category: String(row?.category || "General").trim() || "General",
+        price: toNumber(row?.price ?? row?.selling_price, 0),
+        cost: toNumber(row?.cost ?? row?.food_cost, 0),
+        aliases: Array.isArray(row?.aliases) ? row.aliases : undefined,
+    };
+}
+
+function mapOrder(order: any): Order {
+    const items = Array.isArray(order?.items)
+        ? order.items.map((item: any) => ({
+            menuItemId: toNumber(item?.menuItemId ?? item?.menu_item_id ?? item?.menu_itemid, 0),
+            name: String(item?.name || item?.item_name || "").trim(),
+            qty: Math.max(1, toNumber(item?.qty ?? item?.quantity, 1)),
+            price: toNumber(item?.price ?? item?.selling_price, 0),
+            cost: toNumber(item?.cost ?? item?.food_cost, 0),
+        }))
+        : [];
+
+    const total = toNumber(order?.total, items.reduce((sum, item) => sum + item.price * item.qty, 0));
+    const totalCost = toNumber(order?.totalCost ?? order?.total_cost, items.reduce((sum, item) => sum + item.cost * item.qty, 0));
+    const margin = total > 0 ? ((total - totalCost) / total) * 100 : 0;
+
+    return {
+        id: String(order?.id || order?.orderId || order?.order_id || `ORD-${Date.now()}`),
+        items,
+        total,
+        totalCost,
+        margin: toNumber(order?.margin, margin),
+        timestamp: new Date(order?.timestamp || order?.created_at || new Date().toISOString()),
+        channel: normalizeChannel(order?.channel),
+    };
+}
+
+function mapProfile(row: any): RestaurantProfile {
+    const rawPos = row?.posConfig || row?.pos_config || {};
+    const posConfig: POSConfig = {
+        ...defaultPOSConfig,
+        posType: rawPos?.posType || rawPos?.pos_type || "none",
+        apiBaseUrl: rawPos?.apiBaseUrl || rawPos?.api_base_url || "",
+        apiKey: rawPos?.apiKey || rawPos?.api_key || "",
+        restaurantId: rawPos?.restaurantId || rawPos?.restaurant_id || "",
+        secretKey: rawPos?.secretKey || rawPos?.secret_key || "",
+        autoSync: Boolean(rawPos?.autoSync ?? rawPos?.auto_sync),
+        syncIntervalMinutes: toNumber(rawPos?.syncIntervalMinutes ?? rawPos?.sync_interval_minutes, 5),
+        connected: Boolean(rawPos?.connected ?? rawPos?.posType ?? rawPos?.pos_type),
+    };
+
+    return {
+        name: String(row?.name || ""),
+        location: String(row?.location || ""),
+        cuisine: String(row?.cuisine || ""),
+        usesPOS: Boolean(row?.usesPOS ?? row?.uses_pos),
+        setupComplete: Boolean(row?.setupComplete ?? row?.setup_complete),
+        posConfig,
+    };
+}
+
+function mapCommissions(rows: any[]): ChannelCommission[] {
+    const merged = new Map<string, ChannelCommission>();
+
+    for (const base of defaultCommissions) {
+        merged.set(base.label.toLowerCase(), { ...base });
+    }
+
+    for (const row of rows || []) {
+        const rawName = String(row?.name || row?.channel || row?.label || "").trim();
+        if (!rawName) continue;
+
+        const normalized = normalizeChannel(rawName);
+        const isBuiltIn = Object.prototype.hasOwnProperty.call(channelNameMap, rawName.toUpperCase());
+        const label = isBuiltIn ? channelLabelMap[normalized] : String(row?.label || rawName);
+
+        merged.set(label.toLowerCase(), {
+            channel: isBuiltIn ? normalized : "OTHER",
+            label,
+            commissionPct: toNumber(row?.commission_percentage ?? row?.commissionPct, 0),
+            enabled: typeof row?.enabled === "boolean" ? row.enabled : true,
+        });
+    }
+
+    return Array.from(merged.values());
+}
 
 export function RestaurantDataProvider({ children }: { children: React.ReactNode }) {
-    const [isLoading, setIsLoading] = useState(true);
+    const { user, session } = useAuth();
 
+    const [isLoading, setIsLoading] = useState(true);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
     const [orders, setOrders] = useState<Order[]>([]);
     const [profile, setProfile] = useState<RestaurantProfile>(defaultProfile);
     const [commissions, setCommissions] = useState<ChannelCommission[]>(defaultCommissions);
 
-    // Initial Data Load
-    useEffect(() => {
+    const requestJson = useCallback(async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
+        if (!session?.access_token) {
+            throw new Error("Authentication required");
+        }
+
+        const headers = new Headers(init.headers || {});
+        headers.set("Authorization", `Bearer ${session.access_token}`);
+
+        if (init.body && !headers.has("Content-Type")) {
+            headers.set("Content-Type", "application/json");
+        }
+
+        const response = await fetch(path, { ...init, headers });
+
+        let payload: any = null;
         try {
-            const p = localStorage.getItem(STORAGE_KEYS.PROFILE);
-            if (p) setProfile(JSON.parse(p));
+            payload = await response.json();
+        } catch {
+            payload = null;
+        }
 
-            const m = localStorage.getItem(STORAGE_KEYS.MENU);
-            if (m) setMenuItems(JSON.parse(m));
+        if (!response.ok) {
+            throw new Error(payload?.error || `Request failed (${response.status})`);
+        }
 
-            const o = localStorage.getItem(STORAGE_KEYS.ORDERS);
-            if (o) {
-                const parsedOrders = JSON.parse(o).map((order: any) => ({
-                    ...order,
-                    timestamp: new Date(order.timestamp)
-                }));
-                setOrders(parsedOrders);
-            }
+        return payload as T;
+    }, [session?.access_token]);
 
-            const c = localStorage.getItem(STORAGE_KEYS.COMMISSIONS);
-            if (c) setCommissions(JSON.parse(c));
-        } catch (e) {
-            console.error("Local storage parse error:", e);
+    const refreshMenu = useCallback(async () => {
+        const data = await requestJson<any[]>("/api/menu");
+        setMenuItems((Array.isArray(data) ? data : []).map(mapMenuItem));
+    }, [requestJson]);
+
+    const refreshOrders = useCallback(async () => {
+        const data = await requestJson<any[]>("/api/orders");
+        setOrders((Array.isArray(data) ? data : []).map(mapOrder));
+    }, [requestJson]);
+
+    const refreshProfile = useCallback(async () => {
+        const data = await requestJson<any>("/api/restaurants/profile");
+        setProfile(mapProfile(data));
+    }, [requestJson]);
+
+    const refreshChannels = useCallback(async () => {
+        const data = await requestJson<any[]>("/api/channels");
+        setCommissions(mapCommissions(Array.isArray(data) ? data : []));
+    }, [requestJson]);
+
+    const loadAll = useCallback(async () => {
+        if (!user || !session?.access_token) {
+            setMenuItems([]);
+            setOrders([]);
+            setProfile(defaultProfile);
+            setCommissions(defaultCommissions);
+            setIsLoading(false);
+            return;
+        }
+
+        setIsLoading(true);
+        try {
+            await Promise.all([
+                refreshProfile(),
+                refreshMenu(),
+                refreshOrders(),
+                refreshChannels(),
+            ]);
+        } catch (error) {
+            console.error("Failed to load restaurant data", error);
+            toast.error("Failed to load restaurant data", {
+                description: error instanceof Error ? error.message : "Unexpected error",
+            });
         } finally {
             setIsLoading(false);
         }
-    }, []);
-
-    // State Sync Effects
-    useEffect(() => {
-        if (!isLoading) localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(profile));
-    }, [profile, isLoading]);
+    }, [refreshChannels, refreshMenu, refreshOrders, refreshProfile, session?.access_token, user]);
 
     useEffect(() => {
-        if (!isLoading) localStorage.setItem(STORAGE_KEYS.MENU, JSON.stringify(menuItems));
-    }, [menuItems, isLoading]);
-
-    useEffect(() => {
-        if (!isLoading) localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
-    }, [orders, isLoading]);
-
-    useEffect(() => {
-        if (!isLoading) localStorage.setItem(STORAGE_KEYS.COMMISSIONS, JSON.stringify(commissions));
-    }, [commissions, isLoading]);
+        loadAll();
+    }, [loadAll]);
 
     const addMenuItem = async (item: Omit<MenuItem, "id">) => {
-        const newItem = { ...item, id: Date.now() };
-        setMenuItems(prev => [newItem, ...prev]);
+        await requestJson<any[]>("/api/menu", {
+            method: "POST",
+            body: JSON.stringify([item]),
+        });
+        await refreshMenu();
     };
 
     const removeMenuItem = async (id: number) => {
-        setMenuItems(prev => prev.filter(item => item.id !== id));
+        await requestJson<{ success: boolean }>(`/api/menu?id=${id}`, { method: "DELETE" });
+        setMenuItems((prev) => prev.filter((item) => item.id !== id));
     };
 
     const updateMenuItem = async (id: number, updates: Partial<Omit<MenuItem, "id">>) => {
-        setMenuItems(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
+        const updated = await requestJson<any>("/api/menu", {
+            method: "PUT",
+            body: JSON.stringify({ id, ...updates }),
+        });
+
+        const mapped = mapMenuItem(updated);
+        setMenuItems((prev) => prev.map((item) => (item.id === id ? mapped : item)));
     };
 
     const addOrder = async (items: OrderItem[], channel: SalesChannel = "OFFLINE") => {
-        const orderId = `ORD-${Date.now()}`;
-        const total = items.reduce((s, i) => s + i.price * i.qty, 0);
-        const totalCost = items.reduce((s, i) => s + i.cost * i.qty, 0);
-        const margin = total > 0 ? ((total - totalCost) / total) * 100 : 0;
+        if (!Array.isArray(items) || items.length === 0) return null;
 
-        const newOrder: Order = { id: orderId, items, total, totalCost, margin, timestamp: new Date(), channel };
-        setOrders(prev => [newOrder, ...prev]);
-        return newOrder;
+        const created = await requestJson<{ orderId: string }>("/api/orders", {
+            method: "POST",
+            body: JSON.stringify({ items, channel }),
+        });
+
+        const refreshed = await requestJson<any[]>("/api/orders");
+        const mappedOrders = (Array.isArray(refreshed) ? refreshed : []).map(mapOrder);
+        setOrders(mappedOrders);
+
+        return mappedOrders.find((order) => order.id === created.orderId) || null;
     };
 
     const importMenuItems = async (items: Omit<MenuItem, "id">[]) => {
-        const newItems = items.map((item, i) => ({ ...item, id: Date.now() + i }));
-        setMenuItems(prev => [...newItems, ...prev]);
-        return { added: items.length, duplicates: 0 };
+        if (!Array.isArray(items) || items.length === 0) {
+            return { added: 0, duplicates: 0 };
+        }
+
+        const inserted = await requestJson<any[]>("/api/menu", {
+            method: "POST",
+            body: JSON.stringify(items),
+        });
+
+        await refreshMenu();
+        const added = Array.isArray(inserted) ? inserted.length : items.length;
+        return { added, duplicates: Math.max(0, items.length - added) };
     };
 
     const importOrders = async (newOrders: Order[]) => {
-        setOrders(prev => [...newOrders, ...prev]);
-        return newOrders.length;
+        if (!Array.isArray(newOrders) || newOrders.length === 0) return 0;
+
+        const rows = newOrders.flatMap((order) =>
+            order.items.map((item) => ({
+                order_id: order.id,
+                item_name: item.name,
+                quantity: item.qty,
+                channel: order.channel,
+                timestamp: new Date(order.timestamp).toISOString(),
+            })),
+        );
+
+        const result = await requestJson<{ count?: number }>("/api/orders/upload", {
+            method: "POST",
+            body: JSON.stringify(rows),
+        });
+
+        await refreshOrders();
+        return toNumber(result?.count, rows.length);
     };
 
     const updateProfile = async (updates: Partial<RestaurantProfile>) => {
-        setProfile(prev => ({ ...prev, ...updates }));
+        const merged = {
+            ...profile,
+            ...updates,
+            posConfig: updates.posConfig || profile.posConfig || defaultPOSConfig,
+        };
+
+        const updated = await requestJson<any>("/api/restaurants/profile", {
+            method: "PUT",
+            body: JSON.stringify(merged),
+        });
+
+        setProfile(mapProfile(updated));
     };
 
     const updatePOSConfig = async (config: POSConfig) => {
-        setProfile(prev => ({ ...prev, posConfig: config, usesPOS: config.posType !== "none" }));
-        localStorage.setItem(STORAGE_KEYS.POS_CONFIG, JSON.stringify(config));
+        await updateProfile({ posConfig: config, usesPOS: config.posType !== "none" });
     };
 
     const updateCommission = async (channel: SalesChannel, updates: Partial<ChannelCommission>) => {
-        setCommissions(prev => prev.map(c => c.channel === channel ? { ...c, ...updates } : c));
+        const exact = updates.label
+            ? commissions.find((commission) => commission.label === updates.label)
+            : commissions.find((commission) => commission.channel === channel);
+
+        const requestedLabel = updates.label || exact?.label || "";
+        const mappedByLabel = builtInLabelMap[requestedLabel.toLowerCase()];
+        const name = channel !== "OTHER"
+            ? channel
+            : mappedByLabel
+                ? mappedByLabel
+                : requestedLabel || "OTHER";
+        const commissionPct = typeof updates.commissionPct === "number"
+            ? updates.commissionPct
+            : exact?.commissionPct || 0;
+        const enabled = typeof updates.enabled === "boolean"
+            ? updates.enabled
+            : exact?.enabled ?? true;
+
+        await requestJson<any>("/api/channels", {
+            method: "POST",
+            body: JSON.stringify({
+                name,
+                commission_percentage: commissionPct,
+                enabled,
+            }),
+        });
+
+        await refreshChannels();
     };
 
     const addCommission = async (label: string, commissionPct: number) => {
-        // Custom platforms use "OTHER" channel type internally
-        const exists = commissions.find(c => c.label.toLowerCase() === label.toLowerCase());
-        if (exists) return;
-        setCommissions(prev => [...prev, { channel: "OTHER" as SalesChannel, label, commissionPct, enabled: true }]);
+        await requestJson<any>("/api/channels", {
+            method: "POST",
+            body: JSON.stringify({
+                name: label,
+                commission_percentage: commissionPct,
+                enabled: true,
+            }),
+        });
+
+        await refreshChannels();
     };
 
     const removeCommission = async (label: string) => {
-        // Prevent removing built-in channels
-        const builtIn = ["Offline / Dine-in", "Zomato", "Swiggy", "Other Online"];
-        if (builtIn.includes(label)) return;
-        setCommissions(prev => prev.filter(c => c.label !== label));
+        await requestJson<any>("/api/channels", {
+            method: "DELETE",
+            body: JSON.stringify({ name: label }),
+        });
+
+        await refreshChannels();
     };
 
     const getCommission = useCallback((channel: SalesChannel) => {
-        const c = commissions.find(cc => cc.channel === channel);
-        return c?.enabled ? c.commissionPct : 0;
+        const commission = commissions.find((entry) => entry.channel === channel);
+        return commission?.enabled ? commission.commissionPct : 0;
     }, [commissions]);
 
-    const totalRevenue = orders.reduce((s, o) => s + o.total, 0);
-    const totalOrders = orders.length;
-    const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+    const totals = useMemo(() => {
+        const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0);
+        const totalOrders = orders.length;
+        const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+        return { totalRevenue, totalOrders, avgOrderValue };
+    }, [orders]);
 
     return (
         <RestaurantDataContext.Provider
             value={{
-                menuItems, orders, profile, commissions, isLoading,
-                addMenuItem, removeMenuItem, updateMenuItem, addOrder, importMenuItems, importOrders,
-                updateProfile, updatePOSConfig, updateCommission, addCommission, removeCommission, getCommission,
-                totalRevenue, totalOrders, avgOrderValue,
+                menuItems,
+                orders,
+                profile,
+                commissions,
+                isLoading,
+                addMenuItem,
+                removeMenuItem,
+                updateMenuItem,
+                addOrder,
+                importMenuItems,
+                importOrders,
+                updateProfile,
+                updatePOSConfig,
+                updateCommission,
+                addCommission,
+                removeCommission,
+                getCommission,
+                totalRevenue: totals.totalRevenue,
+                totalOrders: totals.totalOrders,
+                avgOrderValue: totals.avgOrderValue,
             }}
         >
             {children}
@@ -199,3 +463,4 @@ export function useRestaurantData() {
     if (!ctx) throw new Error("useRestaurantData must be used inside RestaurantDataProvider");
     return ctx;
 }
+

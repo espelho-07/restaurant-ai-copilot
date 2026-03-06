@@ -1,39 +1,137 @@
-import { VercelRequest, VercelResponse } from '@vercel/node';
-import { createClient } from '@supabase/supabase-js';
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { getAuthContext, parseNumber, supabase } from "./_lib/auth";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+const defaultChannels = [
+  { name: "OFFLINE", commission_percentage: 0 },
+  { name: "ZOMATO", commission_percentage: 25 },
+  { name: "SWIGGY", commission_percentage: 22 },
+  { name: "CALL", commission_percentage: 0 },
+  { name: "OTHER", commission_percentage: 15 },
+];
+
+function normalizeChannelName(name: string): string {
+  const raw = String(name || "").trim();
+  if (!raw) return "";
+  const upper = raw.toUpperCase();
+
+  if (["OFFLINE", "DINEIN", "DINE_IN"].includes(upper)) return "OFFLINE";
+  if (["ZOMATO"].includes(upper)) return "ZOMATO";
+  if (["SWIGGY"].includes(upper)) return "SWIGGY";
+  if (["CALL", "PHONE"].includes(upper)) return "CALL";
+  if (["OTHER"].includes(upper)) return "OTHER";
+
+  return raw;
+}
+
+async function ensureDefaultChannels(restaurantId: string) {
+  await supabase
+    .from("channels")
+    .upsert(
+      defaultChannels.map((channel) => ({
+        restaurant_id: restaurantId,
+        ...channel,
+      })),
+      { onConflict: "restaurant_id,name" },
+    );
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { restaurantId } = await getAuthContext(req);
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError || !user) return res.status(401).json({ error: 'Invalid token' });
+    if (req.method === "GET") {
+      const { data: rows, error } = await supabase
+        .from("channels")
+        .select("*")
+        .eq("restaurant_id", restaurantId)
+        .order("name", { ascending: true });
 
-    const { data: restaurant } = await supabase.from('restaurants').select('id').eq('user_id', user.id).single();
-    if (!restaurant) return res.status(404).json({ error: 'Restaurant profile not found' });
+      if (error) return res.status(500).json({ error: error.message });
 
-    if (req.method === 'GET') {
-        const { data: channels, error } = await supabase.from('channels').select('*').eq('restaurant_id', restaurant.id);
-        if (error) return res.status(500).json({ error: error.message });
-        return res.status(200).json(channels);
+      if (!rows || rows.length === 0) {
+        await ensureDefaultChannels(restaurantId);
+        const { data: seededRows, error: seededError } = await supabase
+          .from("channels")
+          .select("*")
+          .eq("restaurant_id", restaurantId)
+          .order("name", { ascending: true });
+
+        if (seededError) return res.status(500).json({ error: seededError.message });
+        return res.status(200).json(seededRows || []);
+      }
+
+      return res.status(200).json(rows);
     }
 
-    if (req.method === 'POST') {
-        const { name, commission_percentage } = req.body;
+    if (req.method === "POST") {
+      const name = normalizeChannelName(String(req.body?.name || req.body?.channel || ""));
+      const commissionPercentage = parseNumber(req.body?.commission_percentage ?? req.body?.commissionPct, 0);
+      const enabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : true;
 
-        // Upsert channel
-        const { data, error } = await supabase.from('channels').upsert({
-            restaurant_id: restaurant.id,
-            name: name,
-            commission_percentage: commission_percentage
-        }, { onConflict: 'restaurant_id,name' }).select().single();
+      if (!name) return res.status(400).json({ error: "Channel name is required" });
 
-        if (error) return res.status(500).json({ error: error.message });
-        return res.status(200).json(data);
+      const baseRow = {
+        restaurant_id: restaurantId,
+        name,
+        commission_percentage: commissionPercentage,
+      };
+
+      let data: any = null;
+      let writeError: any = null;
+
+      const withEnabled = await supabase
+        .from("channels")
+        .upsert({
+          ...baseRow,
+          enabled,
+        }, { onConflict: "restaurant_id,name" })
+        .select("*")
+        .single();
+
+      data = withEnabled.data;
+      writeError = withEnabled.error;
+
+      if (writeError && /column .*enabled/i.test(writeError.message || "")) {
+        const fallback = await supabase
+          .from("channels")
+          .upsert(baseRow, { onConflict: "restaurant_id,name" })
+          .select("*")
+          .single();
+
+        data = fallback.data;
+        writeError = fallback.error;
+      }
+
+      if (writeError) return res.status(500).json({ error: writeError.message });
+      return res.status(200).json(data);
     }
 
-    return res.status(405).json({ error: 'Method not allowed' });
+    if (req.method === "DELETE") {
+      const id = req.query?.id || req.body?.id;
+      const rawName = req.query?.name || req.body?.name || req.body?.channel;
+      const name = rawName ? normalizeChannelName(String(rawName)) : "";
+
+      let query = supabase.from("channels").delete().eq("restaurant_id", restaurantId);
+      if (id) {
+        query = query.eq("id", id);
+      } else if (name) {
+        query = query.eq("name", name);
+      } else {
+        return res.status(400).json({ error: "Provide channel id or name" });
+      }
+
+      const { error } = await query;
+      if (error) return res.status(500).json({ error: error.message });
+      return res.status(200).json({ success: true });
+    }
+
+    return res.status(405).json({ error: "Method not allowed" });
+  } catch (error) {
+    if (error instanceof Error) {
+      const status = error.message === "Unauthorized" || error.message === "Invalid token" ? 401 : 500;
+      return res.status(status).json({ error: error.message });
+    }
+
+    return res.status(500).json({ error: "Unexpected server error" });
+  }
 }
