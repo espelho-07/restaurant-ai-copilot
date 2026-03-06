@@ -6,7 +6,7 @@ import type {
     MenuItem, Order, VoiceIntent, OrderItemModifier, VoiceOrderItem,
     ConversationMessage, VoiceSessionState, ClarificationQuestion,
     UpsellSuggestion, ComboSuggestion,
-} from "./types";
+} from "./types.js";
 
 // ─── NUMBER WORDS (English + Hindi) ──────────────────────────────
 
@@ -762,3 +762,4 @@ export function createInitialState(language: "en-IN" | "hi-IN" = "en-IN"): Voice
         orderId: null,
     };
 }
+

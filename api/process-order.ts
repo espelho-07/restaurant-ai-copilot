@@ -4,14 +4,14 @@ import {
   createOrGetSession,
   deleteSession,
   getSession,
-} from "./_lib/callSessionStore";
+} from "./_lib/callSessionStore.js";
 import {
   getBaseUrl,
   parseFormBody,
   persistCallLog,
   processSpeechTurn,
   resolveRestaurantId,
-} from "./_lib/twilioVoice";
+} from "./_lib/twilioVoice.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST" && req.method !== "GET") {
@@ -72,5 +72,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say>We are transferring you to restaurant staff now.</Say><Dial>${process.env.RESTAURANT_FALLBACK_PHONE || ""}</Dial></Response>`);
   }
 }
+
 
 

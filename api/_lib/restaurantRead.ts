@@ -1,5 +1,5 @@
-import type { ChannelCommission, MenuItem, Order, OrderItem, SalesChannel } from "../../src/lib/types";
-import { supabase } from "./auth";
+import type { ChannelCommission, MenuItem, Order, OrderItem, SalesChannel } from "../../src/lib/types.js";
+import { supabase } from "./auth.js";
 
 interface MenuRow {
   id: number | string;
@@ -116,4 +116,5 @@ export async function fetchRestaurantDataset(restaurantId: string): Promise<{
 
   return { menuItems, orders, commissions };
 }
+
 

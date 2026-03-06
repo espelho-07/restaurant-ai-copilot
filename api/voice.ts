@@ -1,12 +1,12 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { cleanupExpiredSessions, createOrGetSession, updateSession } from "./_lib/callSessionStore";
+import { cleanupExpiredSessions, createOrGetSession, updateSession } from "./_lib/callSessionStore.js";
 import {
   buildInitialVoiceResponse,
   getBaseUrl,
   parseFormBody,
   persistCallLog,
   resolveRestaurantId,
-} from "./_lib/twilioVoice";
+} from "./_lib/twilioVoice.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST" && req.method !== "GET") {
@@ -30,3 +30,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Content-Type", "text/xml");
   return res.status(200).send(twiml);
 }
+

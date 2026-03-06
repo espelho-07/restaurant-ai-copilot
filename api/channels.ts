@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getAuthContext, parseNumber, supabase } from "./_lib/auth";
+import { getAuthContext, parseNumber, supabase } from "./_lib/auth.js";
 
 const defaultChannels = [
   { name: "OFFLINE", commission_percentage: 0 },

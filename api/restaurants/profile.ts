@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getAuthContext, supabase } from "../_lib/auth";
+import { getAuthContext, supabase } from "../_lib/auth.js";
 
 function safeBoolean(value: unknown, fallback = false): boolean {
   if (typeof value === "boolean") return value;
@@ -103,3 +103,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Unexpected server error" });
   }
 }
+

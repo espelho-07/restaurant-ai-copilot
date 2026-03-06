@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getAuthContext, parseNumber, supabase } from "../_lib/auth";
+import { getAuthContext, parseNumber, supabase } from "../_lib/auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -106,3 +106,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Unexpected server error" });
   }
 }
+

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getAuthContext, supabase } from "../_lib/auth";
+import { getAuthContext, supabase } from "../_lib/auth.js";
 
 type CallLogRow = {
   call_sid: string;

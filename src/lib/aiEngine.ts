@@ -11,7 +11,7 @@ import type {
     SalesChannel,
     ChannelCommission,
     ChannelMetrics,
-} from "./types";
+} from "./types.js";
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
@@ -1248,4 +1248,5 @@ export function calculateRevenueSummary(
         monthlySummary,
     };
 }
+
 

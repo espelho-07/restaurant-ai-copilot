@@ -6,9 +6,9 @@ import {
   type MenuItem,
   type Order,
   type OrderItem,
-} from "../../src/lib/types";
-import { processTranscript } from "../../src/lib/voiceEngine";
-import type { CallSession } from "./callSessionStore";
+} from "../../src/lib/types.js";
+import { processTranscript } from "../../src/lib/voiceEngine.js";
+import type { CallSession } from "./callSessionStore.js";
 
 const VoiceResponse = (Twilio as any).twiml?.VoiceResponse || (Twilio as any).default?.twiml?.VoiceResponse;
 
@@ -423,6 +423,7 @@ export async function processSpeechTurn(params: {
   gatherPrompt(response, aiPrompt || "Please continue with your order.", baseUrl, session.language);
   return { twiml: response.toString() };
 }
+
 
 
 

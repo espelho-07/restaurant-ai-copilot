@@ -1,4 +1,4 @@
-import type { ConversationMessage, VoiceOrderItem } from "../../src/lib/types";
+import type { ConversationMessage, VoiceOrderItem } from "../../src/lib/types.js";
 
 export type CallFlowStatus = "collecting_order" | "awaiting_confirmation" | "completed" | "transferred";
 
@@ -81,3 +81,4 @@ export function cleanupExpiredSessions(): void {
     }
   }
 }
+
