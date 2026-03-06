@@ -5,7 +5,7 @@ import {
   deleteSession,
   getSession,
 } from "./_lib/callSessionStore.js";
-import { hasBackendSupabaseEnv } from "./_lib/auth.js";
+import { hasBackendSupabaseEnv, supabase } from "./_lib/auth.js";
 import {
   buildTransferResponse,
   getBaseUrl,
@@ -14,6 +14,23 @@ import {
   processSpeechTurn,
   resolveRestaurantId,
 } from "./_lib/twilioVoice.js";
+
+async function isCallAlreadyClosed(callSid: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from("call_logs")
+      .select("status")
+      .eq("call_sid", callSid)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) return false;
+    const status = String(data?.status || "").toLowerCase();
+    return status === "completed" || status === "transferred";
+  } catch {
+    return false;
+  }
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST" && req.method !== "GET") {
@@ -41,6 +58,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   let session = getSession(callSid);
   if (!session) {
+    const alreadyClosed = await isCallAlreadyClosed(callSid);
+    if (alreadyClosed) {
+      res.setHeader("Content-Type", "text/xml");
+      return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+    }
     session = createOrGetSession(callSid, from, to);
   }
 
