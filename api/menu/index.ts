@@ -1,6 +1,16 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getAuthContext, parseNumber, supabase } from "../_lib/auth.js";
 
+function mapMenuRow(row: any) {
+  return {
+    id: Number(row.id),
+    name: String(row.item_name),
+    category: String(row.category || "General"),
+    price: parseNumber(row.selling_price, 0),
+    cost: parseNumber(row.food_cost, 0),
+  };
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { restaurantId } = await getAuthContext(req);
@@ -8,48 +18,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === "GET") {
       const { data, error } = await supabase
         .from("menu_items")
-        .select("id,item_name,category,selling_price,food_cost,aliases")
+        .select("id,item_name,category,selling_price,food_cost")
         .eq("restaurant_id", restaurantId)
         .order("item_name", { ascending: true });
 
       if (error) return res.status(500).json({ error: error.message });
-
-      return res.status(200).json((data || []).map((row: any) => ({
-        id: Number(row.id),
-        name: String(row.item_name),
-        category: String(row.category || "General"),
-        price: parseNumber(row.selling_price, 0),
-        cost: parseNumber(row.food_cost, 0),
-        aliases: Array.isArray(row.aliases) ? row.aliases : [],
-      })));
+      return res.status(200).json((data || []).map(mapMenuRow));
     }
 
     if (req.method === "POST") {
       const payload = req.body;
       const items = Array.isArray(payload) ? payload : [payload];
 
-      const rows = items.map((item: Record<string, unknown>) => ({
-        restaurant_id: restaurantId,
-        item_name: String(item.name || item.item_name || "").trim(),
-        category: String(item.category || "General").trim(),
-        selling_price: parseNumber(item.price ?? item.selling_price, 0),
-        food_cost: parseNumber(item.cost ?? item.food_cost, 0),
-        aliases: Array.isArray(item.aliases) ? item.aliases : null,
-      })).filter((item) => item.item_name.length > 0);
+      const rows = items
+        .map((item: Record<string, unknown>) => ({
+          restaurant_id: restaurantId,
+          item_name: String(item.name || item.item_name || "").trim(),
+          category: String(item.category || "General").trim(),
+          selling_price: parseNumber(item.price ?? item.selling_price, 0),
+          food_cost: parseNumber(item.cost ?? item.food_cost, 0),
+        }))
+        .filter((item) => item.item_name.length > 0);
 
       if (rows.length === 0) return res.status(400).json({ error: "No valid menu items provided" });
 
-      const { data, error } = await supabase.from("menu_items").insert(rows).select("id,item_name,category,selling_price,food_cost,aliases");
-      if (error) return res.status(500).json({ error: error.message });
+      const { data, error } = await supabase
+        .from("menu_items")
+        .insert(rows)
+        .select("id,item_name,category,selling_price,food_cost");
 
-      return res.status(200).json((data || []).map((row: any) => ({
-        id: Number(row.id),
-        name: String(row.item_name),
-        category: String(row.category || "General"),
-        price: parseNumber(row.selling_price, 0),
-        cost: parseNumber(row.food_cost, 0),
-        aliases: Array.isArray(row.aliases) ? row.aliases : [],
-      })));
+      if (error) return res.status(500).json({ error: error.message });
+      return res.status(200).json((data || []).map(mapMenuRow));
     }
 
     if (req.method === "PUT") {
@@ -61,26 +60,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (updates.category !== undefined) patch.category = String(updates.category || "General");
       if (updates.price !== undefined || updates.selling_price !== undefined) patch.selling_price = parseNumber(updates.price ?? updates.selling_price, 0);
       if (updates.cost !== undefined || updates.food_cost !== undefined) patch.food_cost = parseNumber(updates.cost ?? updates.food_cost, 0);
-      if (updates.aliases !== undefined) patch.aliases = Array.isArray(updates.aliases) ? updates.aliases : null;
 
       const { data, error } = await supabase
         .from("menu_items")
         .update(patch)
         .eq("restaurant_id", restaurantId)
         .eq("id", id)
-        .select("id,item_name,category,selling_price,food_cost,aliases")
+        .select("id,item_name,category,selling_price,food_cost")
         .single();
 
       if (error) return res.status(500).json({ error: error.message });
-
-      return res.status(200).json({
-        id: Number(data.id),
-        name: String(data.item_name),
-        category: String(data.category || "General"),
-        price: parseNumber(data.selling_price, 0),
-        cost: parseNumber(data.food_cost, 0),
-        aliases: Array.isArray(data.aliases) ? data.aliases : [],
-      });
+      return res.status(200).json(mapMenuRow(data));
     }
 
     if (req.method === "DELETE") {
@@ -106,4 +96,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Unexpected server error" });
   }
 }
-

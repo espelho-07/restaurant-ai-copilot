@@ -17,7 +17,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         category: String(item?.category || "General").trim(),
         selling_price: parseNumber(item?.price ?? item?.selling_price, 0),
         food_cost: parseNumber(item?.cost ?? item?.food_cost, 0),
-        aliases: Array.isArray(item?.aliases) ? item.aliases : null,
       }))
       .filter((item: any) => item.item_name.length > 0);
 

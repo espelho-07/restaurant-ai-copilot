@@ -7,7 +7,6 @@ interface MenuRow {
   category?: string | null;
   selling_price?: number | string | null;
   food_cost?: number | string | null;
-  aliases?: string[] | null;
 }
 
 interface OrderRow {
@@ -40,7 +39,7 @@ export async function fetchRestaurantDataset(restaurantId: string): Promise<{
   const [{ data: menuRows, error: menuError }, { data: orderRows, error: orderError }, { data: channelRows, error: channelError }] = await Promise.all([
     supabase
       .from("menu_items")
-      .select("id,item_name,category,selling_price,food_cost,aliases")
+      .select("id,item_name,category,selling_price,food_cost")
       .eq("restaurant_id", restaurantId),
     supabase
       .from("orders")
@@ -63,7 +62,6 @@ export async function fetchRestaurantDataset(restaurantId: string): Promise<{
     category: String(row.category || "General"),
     price: toNumber(row.selling_price, 0),
     cost: toNumber(row.food_cost, 0),
-    aliases: Array.isArray(row.aliases) ? row.aliases : undefined,
   }));
 
   const menuByName = new Map(menuItems.map((item) => [item.name.toLowerCase(), item]));
@@ -116,5 +114,3 @@ export async function fetchRestaurantDataset(restaurantId: string): Promise<{
 
   return { menuItems, orders, commissions };
 }
-
-

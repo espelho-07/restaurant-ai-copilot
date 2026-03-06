@@ -128,7 +128,7 @@ export async function fetchMenuAndOrders(restaurantId: string): Promise<{ menuIt
   const [{ data: menuRows }, { data: orderRows }] = await Promise.all([
     supabase
       .from("menu_items")
-      .select("id,item_name,selling_price,food_cost,category,aliases")
+      .select("id,item_name,selling_price,food_cost,category")
       .eq("restaurant_id", restaurantId),
     supabase
       .from("orders")
@@ -144,7 +144,6 @@ export async function fetchMenuAndOrders(restaurantId: string): Promise<{ menuIt
     selling_price?: number | string | null;
     food_cost?: number | string | null;
     category?: string | null;
-    aliases?: string[] | null;
   };
 
   type OrderRow = {
@@ -164,7 +163,6 @@ export async function fetchMenuAndOrders(restaurantId: string): Promise<{ menuIt
     price: Number(row.selling_price || 0),
     cost: Number(row.food_cost || 0),
     category: String(row.category || "General"),
-    aliases: Array.isArray(row.aliases) ? row.aliases : undefined,
   }));
 
   const menuByName = new Map(menuItems.map((m) => [m.name.toLowerCase(), m]));
@@ -423,6 +421,8 @@ export async function processSpeechTurn(params: {
   gatherPrompt(response, aiPrompt || "Please continue with your order.", baseUrl, session.language);
   return { twiml: response.toString() };
 }
+
+
 
 
 
