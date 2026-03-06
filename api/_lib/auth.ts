@@ -11,6 +11,45 @@ export interface AuthContext {
   restaurantId: string;
 }
 
+function extractMissingColumn(errorMessage: string): string | null {
+  const schemaCacheMatch = errorMessage.match(/Could not find the '([^']+)' column/i);
+  if (schemaCacheMatch?.[1]) return schemaCacheMatch[1];
+
+  const doesNotExistMatch = errorMessage.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+  if (doesNotExistMatch?.[1]) return doesNotExistMatch[1];
+
+  return null;
+}
+
+async function createRestaurantRow(userId: string): Promise<string> {
+  const payload: Record<string, unknown> = {
+    user_id: userId,
+    name: "",
+    location: "",
+    cuisine: "",
+    uses_pos: false,
+    setup_complete: false,
+  };
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("restaurants")
+      .insert(payload)
+      .select("id")
+      .single();
+
+    if (!error && data?.id) return String(data.id);
+
+    const missingColumn = extractMissingColumn(error?.message || "");
+    if (missingColumn && Object.prototype.hasOwnProperty.call(payload, missingColumn)) {
+      delete payload[missingColumn];
+      continue;
+    }
+
+    throw new Error(error?.message || "Restaurant profile not found");
+  }
+}
+
 export async function getAuthContext(req: VercelRequest): Promise<AuthContext> {
   const token = req.headers.authorization?.split(" ")[1];
   if (!token) {
@@ -37,28 +76,11 @@ export async function getAuthContext(req: VercelRequest): Promise<AuthContext> {
     return { userId: user.id, restaurantId: String(existingRestaurant.id) };
   }
 
-  const { data: createdRestaurant, error: createError } = await supabase
-    .from("restaurants")
-    .insert({
-      user_id: user.id,
-      name: "",
-      location: "",
-      cuisine: "",
-      uses_pos: false,
-      setup_complete: false,
-    })
-    .select("id")
-    .single();
-
-  if (createError || !createdRestaurant?.id) {
-    throw new Error(createError?.message || "Restaurant profile not found");
-  }
-
-  return { userId: user.id, restaurantId: String(createdRestaurant.id) };
+  const restaurantId = await createRestaurantRow(user.id);
+  return { userId: user.id, restaurantId };
 }
 
 export function parseNumber(value: unknown, fallback = 0): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
-

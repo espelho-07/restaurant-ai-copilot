@@ -12,6 +12,60 @@ function safeNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function extractMissingColumn(errorMessage: string): string | null {
+  const schemaCacheMatch = errorMessage.match(/Could not find the '([^']+)' column/i);
+  if (schemaCacheMatch?.[1]) return schemaCacheMatch[1];
+
+  const doesNotExistMatch = errorMessage.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+  if (doesNotExistMatch?.[1]) return doesNotExistMatch[1];
+
+  return null;
+}
+
+async function updateRestaurantWithFallback(restaurantId: string, patch: Record<string, unknown>) {
+  const mutablePatch: Record<string, unknown> = { ...patch };
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("restaurants")
+      .update(mutablePatch)
+      .eq("id", restaurantId)
+      .select("*")
+      .single();
+
+    if (!error) return data;
+
+    const missingColumn = extractMissingColumn(error.message || "");
+    if (missingColumn && Object.prototype.hasOwnProperty.call(mutablePatch, missingColumn)) {
+      delete mutablePatch[missingColumn];
+      continue;
+    }
+
+    throw new Error(error.message);
+  }
+}
+
+function mapProfile(data: any) {
+  return {
+    id: String(data?.id || ""),
+    name: data?.name || "",
+    location: data?.location || "",
+    cuisine: data?.cuisine || "",
+    usesPOS: safeBoolean(data?.uses_pos, false),
+    setupComplete: safeBoolean(data?.setup_complete, false),
+    posConfig: {
+      posType: data?.pos_type || "none",
+      apiBaseUrl: data?.pos_api_base_url || "",
+      apiKey: data?.pos_api_key || "",
+      restaurantId: data?.pos_restaurant_id || "",
+      secretKey: data?.pos_secret_key || "",
+      autoSync: safeBoolean(data?.pos_auto_sync, false),
+      syncIntervalMinutes: safeNumber(data?.pos_sync_interval_minutes, 5),
+      connected: data?.pos_type ? true : false,
+    },
+  };
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { userId, restaurantId } = await getAuthContext(req);
@@ -19,37 +73,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === "GET") {
       const { data, error } = await supabase
         .from("restaurants")
-        .select("id,name,location,cuisine,uses_pos,setup_complete,pos_type,pos_api_base_url,pos_api_key,pos_restaurant_id,pos_secret_key,pos_auto_sync,pos_sync_interval_minutes")
+        .select("*")
         .eq("id", restaurantId)
         .single();
 
       if (error) return res.status(500).json({ error: error.message });
-
-      return res.status(200).json({
-        id: String(data.id),
-        name: data.name || "",
-        location: data.location || "",
-        cuisine: data.cuisine || "",
-        usesPOS: safeBoolean(data.uses_pos, false),
-        setupComplete: safeBoolean(data.setup_complete, false),
-        posConfig: {
-          posType: data.pos_type || "none",
-          apiBaseUrl: data.pos_api_base_url || "",
-          apiKey: data.pos_api_key || "",
-          restaurantId: data.pos_restaurant_id || "",
-          secretKey: data.pos_secret_key || "",
-          autoSync: safeBoolean(data.pos_auto_sync, false),
-          syncIntervalMinutes: safeNumber(data.pos_sync_interval_minutes, 5),
-          connected: data.pos_type ? true : false,
-        },
-      });
+      return res.status(200).json(mapProfile(data));
     }
 
     if (req.method === "PUT") {
       const body = req.body || {};
       const posConfig = body.posConfig || body.pos_config || {};
 
-      const patch = {
+      const patch: Record<string, unknown> = {
         user_id: userId,
         name: body.name ?? "",
         location: body.location ?? "",
@@ -65,33 +101,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         pos_sync_interval_minutes: posConfig.syncIntervalMinutes ?? posConfig.sync_interval_minutes ?? 5,
       };
 
-      const { data, error } = await supabase
-        .from("restaurants")
-        .update(patch)
-        .eq("id", restaurantId)
-        .select("id,name,location,cuisine,uses_pos,setup_complete,pos_type,pos_api_base_url,pos_api_key,pos_restaurant_id,pos_secret_key,pos_auto_sync,pos_sync_interval_minutes")
-        .single();
-
-      if (error) return res.status(500).json({ error: error.message });
-
-      return res.status(200).json({
-        id: String(data.id),
-        name: data.name || "",
-        location: data.location || "",
-        cuisine: data.cuisine || "",
-        usesPOS: safeBoolean(data.uses_pos, false),
-        setupComplete: safeBoolean(data.setup_complete, false),
-        posConfig: {
-          posType: data.pos_type || "none",
-          apiBaseUrl: data.pos_api_base_url || "",
-          apiKey: data.pos_api_key || "",
-          restaurantId: data.pos_restaurant_id || "",
-          secretKey: data.pos_secret_key || "",
-          autoSync: safeBoolean(data.pos_auto_sync, false),
-          syncIntervalMinutes: safeNumber(data.pos_sync_interval_minutes, 5),
-          connected: data.pos_type ? true : false,
-        },
-      });
+      const updated = await updateRestaurantWithFallback(restaurantId, patch);
+      return res.status(200).json(mapProfile(updated));
     }
 
     return res.status(405).json({ error: "Method not allowed" });
@@ -103,4 +114,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Unexpected server error" });
   }
 }
-
