@@ -512,10 +512,119 @@ export function generateDashboardInsights(
         });
     }
 
+    // 7. Festival / Seasonal Intelligence
+    const festivalInsights = generateFestivalInsights(menuItems, orders);
+    insights.push(...festivalInsights);
+
     return insights.sort((a, b) => {
         const prio = { high: 0, medium: 1, low: 2 };
         return prio[a.priority] - prio[b.priority];
     });
+}
+
+// ─── FESTIVAL / SEASONAL ENGINE ──────────────────────────────────
+
+interface FestivalInfo {
+    name: string;
+    month: number;
+    day: number;
+    duration: number; // days
+    strategies: string[];
+    emoji: string;
+}
+
+const INDIAN_FESTIVALS: FestivalInfo[] = [
+    { name: "Makar Sankranti", month: 1, day: 14, duration: 3, emoji: "🪁", strategies: ["til-gur sweets combo", "festive thali special", "group meal deals"] },
+    { name: "Republic Day", month: 1, day: 26, duration: 2, emoji: "🇮🇳", strategies: ["tricolor themed meals", "patriotic combo deals", "family feast packages"] },
+    { name: "Holi", month: 3, day: 14, duration: 3, emoji: "🎨", strategies: ["thandai + sweets combo", "colorful special menu", "group celebration packages"] },
+    { name: "Ram Navami", month: 4, day: 17, duration: 2, emoji: "🙏", strategies: ["satvik thali", "festive sweets", "pure veg specials"] },
+    { name: "Independence Day", month: 8, day: 15, duration: 2, emoji: "🇮🇳", strategies: ["tri-color meals", "freedom feast combos", "family patriotic thali"] },
+    { name: "Raksha Bandhan", month: 8, day: 19, duration: 2, emoji: "🎀", strategies: ["sibling meal deals", "sweets hamper + meal combo", "family celebration packages"] },
+    { name: "Janmashtami", month: 8, day: 26, duration: 2, emoji: "🦚", strategies: ["makhan mishri specials", "chappan bhog thali", "midnight feast deals"] },
+    { name: "Ganesh Chaturthi", month: 9, day: 7, duration: 10, emoji: "🐘", strategies: ["modak specials", "festive combo platters", "group celebration packs"] },
+    { name: "Navratri", month: 10, day: 3, duration: 9, emoji: "🕉️", strategies: ["navratri vrat thali", "fasting-friendly menu", "garba night dinner specials"] },
+    { name: "Dussehra", month: 10, day: 12, duration: 2, emoji: "🏹", strategies: ["victory feast combos", "family dinner packages", "sweet + meal bundles"] },
+    { name: "Diwali", month: 10, day: 31, duration: 5, emoji: "🪔", strategies: ["Diwali feast thali", "sweet boxes + meal combo", "premium dinner packages", "group celebration deals"] },
+    { name: "Christmas", month: 12, day: 25, duration: 3, emoji: "🎄", strategies: ["Christmas special menu", "plum cake + meal combo", "holiday feast packages"] },
+    { name: "New Year", month: 12, day: 31, duration: 2, emoji: "🎉", strategies: ["New Year party platters", "midnight feast specials", "couple dinner packages"] },
+];
+
+function getUpcomingFestivals(today: Date): { festival: FestivalInfo; daysAway: number; isActive: boolean }[] {
+    const results: { festival: FestivalInfo; daysAway: number; isActive: boolean }[] = [];
+    const currentYear = today.getFullYear();
+
+    for (const f of INDIAN_FESTIVALS) {
+        const festDate = new Date(currentYear, f.month - 1, f.day);
+        const festEnd = new Date(festDate.getTime() + f.duration * 24 * 60 * 60 * 1000);
+
+        let diff = Math.floor((festDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        const isActive = today >= festDate && today <= festEnd;
+
+        // If festival already passed this year, look at next year
+        if (diff < -f.duration && !isActive) {
+            const nextYear = new Date(currentYear + 1, f.month - 1, f.day);
+            diff = Math.floor((nextYear.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        }
+
+        if (isActive || (diff >= 0 && diff <= 30)) {
+            results.push({ festival: f, daysAway: Math.max(0, diff), isActive });
+        }
+    }
+
+    return results.sort((a, b) => a.daysAway - b.daysAway);
+}
+
+export function generateFestivalInsights(menuItems: MenuItem[], orders: Order[]): AIInsight[] {
+    const insights: AIInsight[] = [];
+    const today = new Date();
+    const upcoming = getUpcomingFestivals(today);
+
+    if (upcoming.length === 0) return insights;
+
+    // Find high-margin items to recommend for festivals
+    const highMarginItems = menuItems
+        .filter((m) => calculateMargin(m) > 50)
+        .sort((a, b) => calculateMargin(b) - calculateMargin(a))
+        .slice(0, 5);
+
+    const topSellers = menuItems
+        .map((m) => ({ item: m, count: getOrderCountForItem(m.id, orders) }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 3)
+        .map((m) => m.item);
+
+    for (const { festival, daysAway, isActive } of upcoming.slice(0, 2)) {
+        const description = isActive
+            ? `${festival.emoji} ${festival.name} is NOW! Maximize revenue with festive promotions.`
+            : `${festival.emoji} ${festival.name} is ${daysAway} day${daysAway !== 1 ? "s" : ""} away. Prepare festive offers now!`;
+
+        const reasoning: string[] = [
+            `Festival: ${festival.name} (${isActive ? "ACTIVE" : `in ${daysAway} days`}).`,
+            `Strategy: ${festival.strategies.join(", ")}.`,
+        ];
+
+        if (highMarginItems.length > 0) {
+            reasoning.push(`High-margin items to promote: ${highMarginItems.slice(0, 3).map((m) => `${m.name} (${calculateMargin(m).toFixed(0)}%)`).join(", ")}.`);
+        }
+        if (topSellers.length > 0) {
+            reasoning.push(`Bundle top sellers: ${topSellers.map((m) => m.name).join(" + ")} as a festive combo.`);
+        }
+        reasoning.push(`Tip: Increase prices 5-10% during peak festival demand — customers expect premium pricing.`);
+
+        insights.push({
+            type: "opportunity",
+            title: `${festival.emoji} ${festival.name} ${isActive ? "Opportunity" : "Preparation"}`,
+            description,
+            impact: isActive ? "+15-25% revenue potential" : "Plan ahead for maximum impact",
+            priority: isActive ? "high" : daysAway <= 7 ? "high" : "medium",
+            confidence: clampConfidence(isActive ? 85 : 70),
+            impactLevel: isActive || daysAway <= 7 ? "HIGH" : "MEDIUM",
+            reasoning,
+            impactedMetrics: ["Revenue", "Average Order Value", "Customer Engagement"],
+        });
+    }
+
+    return insights;
 }
 
 // ─── SALES VELOCITY & POPULARITY SCORING ──────────────────────────

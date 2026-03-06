@@ -142,7 +142,7 @@ export async function parseOrderCSV(
         }
 
         const errors: string[] = [];
-        const orderMap = new Map<string, { items: OrderItem[]; timestamp: Date }>();
+        const orderMap = new Map<string, { items: OrderItem[]; timestamp: Date; channel: "OFFLINE" | "ZOMATO" | "SWIGGY" | "OTHER" }>();
         const unmatchedSet = new Set<string>();
         let matchedItems = 0;
 
@@ -154,6 +154,7 @@ export async function parseOrderCSV(
             const itemName = getField(row, "Item Name", "item name", "item_name", "Name", "name");
             const qtyStr = getField(row, "Quantity", "quantity", "qty");
             const timestampStr = getField(row, "Timestamp", "timestamp", "date", "Date");
+            const channelStr = getField(row, "Channel", "channel", "Platform", "platform", "Source", "source");
 
             if (!itemName) {
                 if (qtyStr || orderId) errors.push(`Row ${rowNum}: Missing item name`);
@@ -164,6 +165,19 @@ export async function parseOrderCSV(
             const timestamp = timestampStr ? new Date(timestampStr) : new Date();
             if (isNaN(timestamp.getTime())) {
                 errors.push(`Row ${rowNum}: Invalid timestamp "${timestampStr}", using current time`);
+            }
+
+            // Parse channel
+            let channel: "OFFLINE" | "ZOMATO" | "SWIGGY" | "OTHER" = "OFFLINE";
+            if (channelStr) {
+                const ch = channelStr.toUpperCase().trim();
+                if (ch === "ZOMATO") channel = "ZOMATO";
+                else if (ch === "SWIGGY") channel = "SWIGGY";
+                else if (ch === "OTHER" || ch === "OTHER ONLINE") channel = "OTHER";
+                else if (ch === "OFFLINE" || ch === "DINE-IN" || ch === "DINEIN" || ch === "DINE IN") channel = "OFFLINE";
+                else if (ch.includes("ZOMATO")) channel = "ZOMATO";
+                else if (ch.includes("SWIGGY")) channel = "SWIGGY";
+                else if (ch !== "OFFLINE") channel = "OTHER";
             }
 
             // Fuzzy match item
@@ -179,7 +193,7 @@ export async function parseOrderCSV(
             matchedItems++;
 
             if (!orderMap.has(orderId)) {
-                orderMap.set(orderId, { items: [], timestamp: isNaN(timestamp.getTime()) ? new Date() : timestamp });
+                orderMap.set(orderId, { items: [], timestamp: isNaN(timestamp.getTime()) ? new Date() : timestamp, channel });
             }
 
             const order = orderMap.get(orderId)!;
@@ -209,7 +223,7 @@ export async function parseOrderCSV(
                 totalCost,
                 margin: total > 0 ? ((total - totalCost) / total) * 100 : 0,
                 timestamp: data.timestamp,
-                channel: "OFFLINE", // Default channel for uploaded CSV/Excel orders
+                channel: data.channel,
             });
         }
 

@@ -15,6 +15,15 @@ import RestaurantSetup from "./pages/RestaurantSetup";
 import OrdersSimulation from "./pages/OrdersSimulation";
 import Orders from "./pages/Orders";
 import NotFound from "./pages/NotFound";
+import ComingSoon from "./pages/ComingSoon";
+import ContributionMargin from "./pages/ContributionMargin";
+import ItemProfitability from "./pages/ItemProfitability";
+import SalesVelocity from "./pages/SalesVelocity";
+import HiddenStars from "./pages/HiddenStars";
+import LowMarginRisk from "./pages/LowMarginRisk";
+import SmartUpsell from "./pages/SmartUpsell";
+import PriceOptimization from "./pages/PriceOptimization";
+import PlatformSettings from "./pages/PlatformSettings";
 
 const queryClient = new QueryClient();
 
@@ -39,6 +48,17 @@ const App = () => (
               <Route path="/combos" element={<ComboEngine />} />
               <Route path="/voice" element={<VoiceCopilot />} />
               <Route path="/insights" element={<Insights />} />
+
+              {/* AI Module Detail Pages */}
+              <Route path="/contribution-margin" element={<ContributionMargin />} />
+              <Route path="/item-profitability" element={<ItemProfitability />} />
+              <Route path="/sales-velocity" element={<SalesVelocity />} />
+              <Route path="/hidden-stars" element={<HiddenStars />} />
+              <Route path="/low-margin-risk" element={<LowMarginRisk />} />
+              <Route path="/smart-upsell" element={<SmartUpsell />} />
+              <Route path="/price-optimization" element={<PriceOptimization />} />
+              <Route path="/platform-settings" element={<PlatformSettings />} />
+              <Route path="/coming-soon" element={<ComingSoon />} />
 
               {/* Legacy login route → redirect to dashboard */}
               <Route path="/login" element={<Navigate to="/dashboard" replace />} />

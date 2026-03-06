@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import type { MenuItem, Order, OrderItem, SalesChannel, ChannelCommission } from "./types";
+import type { POSConfig } from "./posService";
+import { defaultPOSConfig } from "./posService";
 import { toast } from "sonner";
 
 export interface RestaurantProfile {
@@ -8,6 +10,7 @@ export interface RestaurantProfile {
     cuisine: string;
     usesPOS: boolean;
     setupComplete: boolean;
+    posConfig?: POSConfig;
 }
 
 const defaultProfile: RestaurantProfile = {
@@ -29,11 +32,15 @@ interface RestaurantDataContextType {
     isLoading: boolean;
     addMenuItem: (item: Omit<MenuItem, "id">) => Promise<void>;
     removeMenuItem: (id: number) => Promise<void>;
+    updateMenuItem: (id: number, updates: Partial<Omit<MenuItem, "id">>) => Promise<void>;
     addOrder: (items: OrderItem[], channel?: SalesChannel) => Promise<Order | null>;
     importMenuItems: (items: Omit<MenuItem, "id">[]) => Promise<{ added: number; duplicates: number }>;
     importOrders: (newOrders: Order[]) => Promise<number>;
     updateProfile: (updates: Partial<RestaurantProfile>) => Promise<void>;
+    updatePOSConfig: (config: POSConfig) => Promise<void>;
     updateCommission: (channel: SalesChannel, updates: Partial<ChannelCommission>) => Promise<void>;
+    addCommission: (label: string, commissionPct: number) => Promise<void>;
+    removeCommission: (label: string) => Promise<void>;
     getCommission: (channel: SalesChannel) => number;
     totalRevenue: number;
     totalOrders: number;
@@ -46,7 +53,8 @@ const STORAGE_KEYS = {
     PROFILE: "app_profile",
     MENU: "app_menu",
     ORDERS: "app_orders",
-    COMMISSIONS: "app_commissions"
+    COMMISSIONS: "app_commissions",
+    POS_CONFIG: "app_pos_config",
 };
 
 export function RestaurantDataProvider({ children }: { children: React.ReactNode }) {
@@ -110,6 +118,10 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
         setMenuItems(prev => prev.filter(item => item.id !== id));
     };
 
+    const updateMenuItem = async (id: number, updates: Partial<Omit<MenuItem, "id">>) => {
+        setMenuItems(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
+    };
+
     const addOrder = async (items: OrderItem[], channel: SalesChannel = "OFFLINE") => {
         const orderId = `ORD-${Date.now()}`;
         const total = items.reduce((s, i) => s + i.price * i.qty, 0);
@@ -136,8 +148,27 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
         setProfile(prev => ({ ...prev, ...updates }));
     };
 
+    const updatePOSConfig = async (config: POSConfig) => {
+        setProfile(prev => ({ ...prev, posConfig: config, usesPOS: config.posType !== "none" }));
+        localStorage.setItem(STORAGE_KEYS.POS_CONFIG, JSON.stringify(config));
+    };
+
     const updateCommission = async (channel: SalesChannel, updates: Partial<ChannelCommission>) => {
         setCommissions(prev => prev.map(c => c.channel === channel ? { ...c, ...updates } : c));
+    };
+
+    const addCommission = async (label: string, commissionPct: number) => {
+        // Custom platforms use "OTHER" channel type internally
+        const exists = commissions.find(c => c.label.toLowerCase() === label.toLowerCase());
+        if (exists) return;
+        setCommissions(prev => [...prev, { channel: "OTHER" as SalesChannel, label, commissionPct, enabled: true }]);
+    };
+
+    const removeCommission = async (label: string) => {
+        // Prevent removing built-in channels
+        const builtIn = ["Offline / Dine-in", "Zomato", "Swiggy", "Other Online"];
+        if (builtIn.includes(label)) return;
+        setCommissions(prev => prev.filter(c => c.label !== label));
     };
 
     const getCommission = useCallback((channel: SalesChannel) => {
@@ -153,8 +184,8 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
         <RestaurantDataContext.Provider
             value={{
                 menuItems, orders, profile, commissions, isLoading,
-                addMenuItem, removeMenuItem, addOrder, importMenuItems, importOrders,
-                updateProfile, updateCommission, getCommission,
+                addMenuItem, removeMenuItem, updateMenuItem, addOrder, importMenuItems, importOrders,
+                updateProfile, updatePOSConfig, updateCommission, addCommission, removeCommission, getCommission,
                 totalRevenue, totalOrders, avgOrderValue,
             }}
         >

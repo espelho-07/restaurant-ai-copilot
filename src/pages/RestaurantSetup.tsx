@@ -20,6 +20,8 @@ import {
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRestaurantData } from "@/lib/restaurantData";
 import { parseMenuCSV, parseOrderCSV } from "@/lib/csvParser";
+import { POS_DEFAULTS, testPOSConnection, fetchMenuFromPOS, fetchOrdersFromPOS } from "@/lib/posService";
+import type { POSConnectionResult, POSType } from "@/lib/posService";
 import { toast } from "sonner";
 
 const cuisineTypes = [
@@ -28,7 +30,7 @@ const cuisineTypes = [
 ];
 
 const RestaurantSetup = () => {
-  const { menuItems, orders, importMenuItems, importOrders, addMenuItem, removeMenuItem, addOrder, updateProfile, profile, commissions, updateCommission } = useRestaurantData();
+  const { menuItems, orders, importMenuItems, importOrders, addMenuItem, removeMenuItem, addOrder, updateProfile, profile, commissions, updateCommission, addCommission, removeCommission, updatePOSConfig } = useRestaurantData();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -40,12 +42,26 @@ const RestaurantSetup = () => {
   const [step, setStep] = useState(1);
   const [usesPOS, setUsesPOS] = useState<boolean | null>(null);
 
+  // POS API integration state
+  const [selectedPOS, setSelectedPOS] = useState<POSType | null>(null);
+  const [posForm, setPosForm] = useState({ apiBaseUrl: "", apiKey: "", restaurantId: "", secretKey: "", autoSync: false, syncInterval: 5 });
+  const [posConnecting, setPosConnecting] = useState(false);
+  const [posConnectionResult, setPosConnectionResult] = useState<POSConnectionResult | null>(null);
+  const [menuSyncing, setMenuSyncing] = useState(false);
+  const [menuSyncDone, setMenuSyncDone] = useState(false);
+  const [orderSyncing, setOrderSyncing] = useState(false);
+  const [orderSyncDone, setOrderSyncDone] = useState(false);
+
   // Sync animation
   const [syncing, setSyncing] = useState(false);
   const [syncDone, setSyncDone] = useState(false);
   const [visibleLogs, setVisibleLogs] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
   const terminalRef = useRef<HTMLDivElement>(null);
+
+  // Custom Platform State
+  const [customPlatformName, setCustomPlatformName] = useState("");
+  const [customPlatformComm, setCustomPlatformComm] = useState("");
 
   // File upload state
   const [menuFile, setMenuFile] = useState<File | null>(null);
@@ -58,7 +74,7 @@ const RestaurantSetup = () => {
     location: profile.location || "",
     cuisine: profile.cuisine || "",
   });
-  const [formErrors, setFormErrors] = useState<{ name?: string; location?: string }>({});
+  const [formErrors, setFormErrors] = useState<{ name?: string; location?: string; cuisine?: string }>({});
 
   // No-POS inline form state
   const [manualItem, setManualItem] = useState({ name: "", price: "", cost: "", category: "" });
@@ -72,14 +88,92 @@ const RestaurantSetup = () => {
   ];
 
   const validateStep1 = () => {
-    const errors: { name?: string; location?: string } = {};
+    const errors: { name?: string; location?: string; cuisine?: string } = {};
     if (!form.name.trim()) errors.name = "Restaurant name is required.";
     if (!form.location.trim()) errors.location = "Location is required.";
+    if (!form.cuisine.trim()) errors.cuisine = "Please select a cuisine type.";
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
 
   // ─── FILE HANDLERS ──────────────────────────────────────────────
+
+  // POS connection handlers
+  const handleTestConnection = async () => {
+    if (!selectedPOS || selectedPOS === "none") return;
+    setPosConnecting(true);
+    setPosConnectionResult(null);
+    try {
+      const result = await testPOSConnection({
+        posType: selectedPOS,
+        apiBaseUrl: posForm.apiBaseUrl,
+        apiKey: posForm.apiKey,
+        restaurantId: posForm.restaurantId,
+        secretKey: posForm.secretKey,
+        autoSync: posForm.autoSync,
+        syncIntervalMinutes: posForm.syncInterval,
+        connected: false,
+      });
+      setPosConnectionResult(result);
+      if (result.success) toast.success("POS Connected!");
+      else toast.error(result.message);
+    } catch (err) {
+      setPosConnectionResult({ success: false, message: "Connection failed. Please check your credentials." });
+      toast.error("Connection failed");
+    } finally {
+      setPosConnecting(false);
+    }
+  };
+
+  const handleMenuSync = async () => {
+    if (!selectedPOS || selectedPOS === "none") return;
+    setMenuSyncing(true);
+    try {
+      const result = await fetchMenuFromPOS({
+        posType: selectedPOS,
+        apiBaseUrl: posForm.apiBaseUrl,
+        apiKey: posForm.apiKey,
+        restaurantId: posForm.restaurantId,
+        secretKey: posForm.secretKey,
+        autoSync: false,
+        syncIntervalMinutes: 5,
+        connected: true,
+      });
+      if (result.items.length > 0) {
+        await importMenuItems(result.items);
+        setMenuSyncDone(true);
+        toast.success(`${result.items.length} menu items synced!`);
+      } else {
+        toast.error("No menu items found");
+      }
+    } catch { toast.error("Menu sync failed"); }
+    finally { setMenuSyncing(false); }
+  };
+
+  const handleOrderSync = async () => {
+    if (!selectedPOS || selectedPOS === "none") return;
+    setOrderSyncing(true);
+    try {
+      const result = await fetchOrdersFromPOS({
+        posType: selectedPOS,
+        apiBaseUrl: posForm.apiBaseUrl,
+        apiKey: posForm.apiKey,
+        restaurantId: posForm.restaurantId,
+        secretKey: posForm.secretKey,
+        autoSync: false,
+        syncIntervalMinutes: 5,
+        connected: true,
+      });
+      if (result.orders.length > 0) {
+        await importOrders(result.orders);
+        setOrderSyncDone(true);
+        toast.success(`${result.orders.length} orders synced!`);
+      } else {
+        toast.error("No orders found");
+      }
+    } catch { toast.error("Order sync failed"); }
+    finally { setOrderSyncing(false); }
+  };
 
   const handleMenuUpload = useCallback(async (file: File) => {
     const validExts = [".csv", ".xlsx", ".xls"];
@@ -285,11 +379,12 @@ const RestaurantSetup = () => {
                 <label className="text-xs font-medium text-muted-foreground">Cuisine Type</label>
                 <div className="relative mt-1.5">
                   <UtensilsCrossed className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <select id="setup-cuisine" value={form.cuisine} onChange={(e) => setForm({ ...form, cuisine: e.target.value })} className="w-full appearance-none rounded-xl border border-border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/20">
-                    <option value="">Select cuisine type</option>
+                  <select id="setup-cuisine" value={form.cuisine} onChange={(e) => { setForm({ ...form, cuisine: e.target.value }); if (e.target.value) setFormErrors(p => ({ ...p, cuisine: undefined })); }} className={`w-full appearance-none rounded-xl border bg-card py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${formErrors.cuisine ? 'border-destructive focus:ring-destructive/20' : 'border-border'}`}>
+                    <option value="">Select cuisine type *</option>
                     {cuisineTypes.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
+                {formErrors.cuisine && <p className="mt-1 text-[11px] text-destructive">{formErrors.cuisine}</p>}
               </div>
             </div>
 
@@ -300,20 +395,53 @@ const RestaurantSetup = () => {
               </div>
               <p className="text-xs text-muted-foreground mb-4">Set your commission rates to get accurate online profitability insights.</p>
               <div className="space-y-3">
-                {commissions.filter(c => c.channel !== "OFFLINE").map((c) => (
-                  <div key={c.channel} className="flex items-center justify-between rounded-xl border border-border bg-secondary/20 p-3">
-                    <div className="flex items-center gap-3">
-                      <input type="checkbox" checked={c.enabled} onChange={(e) => updateCommission(c.channel, { enabled: e.target.checked })} className="h-4 w-4 rounded border-border text-primary focus:ring-primary/20 accent-primary" />
-                      <span className="text-sm font-semibold">{c.label}</span>
-                    </div>
-                    {c.enabled && (
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">Commission %</span>
-                        <input type="number" value={c.commissionPct} onChange={(e) => updateCommission(c.channel, { commissionPct: Number(e.target.value) })} className="w-16 rounded-lg border border-border bg-card py-1 px-2 text-sm font-semibold text-center outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
+                {commissions.filter(c => c.channel !== "OFFLINE").map((c) => {
+                  const builtIn = ["Offline / Dine-in", "Zomato", "Swiggy", "Other Online"];
+                  const isCustom = !builtIn.includes(c.label);
+                  return (
+                    <div key={c.label} className="flex items-center justify-between rounded-xl border border-border bg-secondary/20 p-3">
+                      <div className="flex items-center gap-3">
+                        <input type="checkbox" checked={c.enabled} onChange={(e) => updateCommission(c.channel, { enabled: e.target.checked })} className="h-4 w-4 rounded border-border text-primary focus:ring-primary/20 accent-primary" />
+                        <span className="text-sm font-semibold">{c.label}</span>
+                        {isCustom && <span className="text-[9px] rounded-full bg-accent/10 px-2 py-0.5 font-bold text-accent">Custom</span>}
                       </div>
-                    )}
-                  </div>
-                ))}
+                      <div className="flex items-center gap-2">
+                        {c.enabled && (
+                          <>
+                            <span className="text-xs text-muted-foreground">Commission %</span>
+                            <input type="number" value={c.commissionPct} onChange={(e) => updateCommission(c.channel, { commissionPct: Number(e.target.value) })} className="w-16 rounded-lg border border-border bg-card py-1 px-2 text-sm font-semibold text-center outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
+                          </>
+                        )}
+                        {isCustom && (
+                          <button onClick={() => { removeCommission(c.label); toast.success(`${c.label} removed`); }} className="p-1 text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 rounded-md transition-all" title="Remove platform">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Add Custom Platform */}
+              <div className="mt-4 flex items-end gap-2">
+                <div className="flex-1">
+                  <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Add Custom Platform</label>
+                  <input type="text" id="setup-custom-platform" placeholder="e.g. EatSure, Dunzo" value={customPlatformName} onChange={(e) => setCustomPlatformName(e.target.value)} className="mt-1 w-full rounded-xl border border-border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20" />
+                </div>
+                <div className="w-24">
+                  <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Comm. %</label>
+                  <input type="number" min="0" max="100" placeholder="20" value={customPlatformComm} onChange={(e) => setCustomPlatformComm(e.target.value)} className="mt-1 w-full rounded-xl border border-border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20" />
+                </div>
+                <button onClick={() => {
+                  const name = customPlatformName.trim();
+                  const pct = Number(customPlatformComm);
+                  if (!name) { toast.error("Enter platform name"); return; }
+                  if (!customPlatformComm || pct < 0 || pct > 100) { toast.error("Valid commission 0-100%"); return; }
+                  addCommission(name, pct);
+                  setCustomPlatformName(""); setCustomPlatformComm("");
+                  toast.success(`${name} added!`);
+                }} className="rounded-xl bg-accent px-4 py-2 text-xs font-semibold text-accent-foreground hover:brightness-110 transition-all">+ Add</button>
               </div>
             </div>
 
@@ -327,107 +455,220 @@ const RestaurantSetup = () => {
         {step === 2 && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="mt-8 space-y-6">
 
-            {/* POS Toggle */}
+            {/* POS Yes/No Toggle */}
             <div className="glass-card p-6">
               <h2 className="font-display text-sm font-semibold mb-4">Do you currently use a POS system?</h2>
               <div className="grid grid-cols-2 gap-3">
                 <button
-                  onClick={() => setUsesPOS(true)}
+                  onClick={() => { setUsesPOS(true); setSelectedPOS(null); }}
                   className={`flex flex-col items-center gap-2 rounded-xl border-2 p-5 text-center transition-all ${usesPOS === true ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"}`}
                 >
                   <FileSpreadsheet className={`h-8 w-8 ${usesPOS === true ? "text-primary" : "text-muted-foreground"}`} />
                   <span className="text-sm font-semibold">Yes — I use a POS</span>
-                  <span className="text-xs text-muted-foreground">Upload your existing data</span>
+                  <span className="text-xs text-muted-foreground">Connect API or upload CSV</span>
                 </button>
                 <button
-                  onClick={() => setUsesPOS(false)}
+                  onClick={() => { setUsesPOS(false); setSelectedPOS("none"); }}
                   className={`flex flex-col items-center gap-2 rounded-xl border-2 p-5 text-center transition-all ${usesPOS === false ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"}`}
                 >
                   <PlusCircle className={`h-8 w-8 ${usesPOS === false ? "text-primary" : "text-muted-foreground"}`} />
                   <span className="text-sm font-semibold">No — I don't use a POS</span>
-                  <span className="text-xs text-muted-foreground">Create your data manually</span>
+                  <span className="text-xs text-muted-foreground">Add data manually or CSV</span>
                 </button>
               </div>
             </div>
 
-            {/* YES PATH — CSV Upload */}
+            {/* YES PATH — POS Selection + CSV */}
             {usesPOS === true && (
               <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="space-y-4">
-                <div className="insight-card">
-                  <div className="flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-accent" /><span className="text-xs font-semibold text-accent">How it works</span></div>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Upload your menu and order history as CSV or Excel files. Our AI will analyze the data and generate revenue insights immediately.</p>
+                {/* POS System Cards */}
+                <div className="glass-card p-5">
+                  <h3 className="text-sm font-semibold mb-3">Select your POS system</h3>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    {([
+                      { key: "petpooja", label: "Petpooja", icon: "🟠", desc: "Indian POS leader" },
+                      { key: "posist", label: "POSist", icon: "🔵", desc: "Cloud-based POS" },
+                      { key: "urbanpiper", label: "UrbanPiper", icon: "🟢", desc: "Aggregator hub" },
+                      { key: "other", label: "Other POS", icon: "⚙️", desc: "Custom API" },
+                    ] as const).map((pos) => (
+                      <button key={pos.key}
+                        onClick={() => {
+                          setSelectedPOS(pos.key);
+                          const defaults = POS_DEFAULTS[pos.key];
+                          if (defaults) setPosForm(prev => ({ ...prev, apiBaseUrl: defaults.baseUrl }));
+                        }}
+                        className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-4 text-center transition-all ${selectedPOS === pos.key ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"}`}
+                      >
+                        <span className="text-2xl">{pos.icon}</span>
+                        <span className="text-xs font-semibold">{pos.label}</span>
+                        <span className="text-[10px] text-muted-foreground">{pos.desc}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                {/* Menu Upload */}
-                <div className="glass-card p-5">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Upload className="h-4 w-4 text-primary" />
-                    <h3 className="text-sm font-semibold">Upload Menu Data</h3>
-                    {menuParseResult && menuParseResult.count > 0 && <CheckCircle2 className="ml-auto h-4 w-4 text-success" />}
-                  </div>
-                  <p className="text-xs text-muted-foreground mb-3">Required columns: Item Name, Selling Price, Food Cost, Category</p>
-
-                  <div
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => handleFileDrop(e, "menu")}
-                    className="relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-8 transition-colors hover:border-primary/40"
-                  >
-                    <FileSpreadsheet className="h-8 w-8 text-muted-foreground" />
-                    <p className="mt-2 text-sm font-medium">{menuFile ? menuFile.name : "Drag & drop your menu CSV here"}</p>
-                    <p className="text-xs text-muted-foreground">or click to browse</p>
-                    <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "menu")} className="absolute inset-0 cursor-pointer opacity-0" />
-                  </div>
-
-                  {menuParseResult && (
-                    <div className={`mt-3 rounded-lg p-3 text-xs ${menuParseResult.count > 0 ? "bg-success/5 text-success" : "bg-destructive/5 text-destructive"}`}>
-                      {menuParseResult.count > 0 ? `✓ ${menuParseResult.count} items imported successfully` : "✗ No items imported"}
-                      {menuParseResult.errors.length > 0 && (
-                        <ul className="mt-1 space-y-0.5 text-muted-foreground">
-                          {menuParseResult.errors.slice(0, 3).map((e, i) => <li key={i}>• {e}</li>)}
-                        </ul>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Order Upload */}
-                <div className="glass-card p-5">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Upload className="h-4 w-4 text-accent" />
-                    <h3 className="text-sm font-semibold">Upload Order History</h3>
-                    <span className="text-[10px] text-muted-foreground">(Optional)</span>
-                    {orderParseResult && orderParseResult.count > 0 && <CheckCircle2 className="ml-auto h-4 w-4 text-success" />}
-                  </div>
-                  <p className="text-xs text-muted-foreground mb-3">Columns: Order ID, Item Name, Quantity, Timestamp</p>
-
-                  <div
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => handleFileDrop(e, "order")}
-                    className="relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-8 transition-colors hover:border-primary/40"
-                  >
-                    <FileSpreadsheet className="h-8 w-8 text-muted-foreground" />
-                    <p className="mt-2 text-sm font-medium">{orderFile ? orderFile.name : "Drag & drop your order CSV here"}</p>
-                    <p className="text-xs text-muted-foreground">or click to browse</p>
-                    <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "order")} className="absolute inset-0 cursor-pointer opacity-0" />
-                  </div>
-
-                  {orderParseResult && (
-                    <div className={`mt-3 rounded-lg p-3 text-xs ${orderParseResult.count > 0 ? "bg-success/5 text-success" : "bg-destructive/5 text-destructive"}`}>
-                      {orderParseResult.count > 0 ? `✓ ${orderParseResult.count} orders imported` : "✗ No orders imported"}
-                      {orderParseResult.unmatched.length > 0 && (
-                        <div className="mt-1.5 flex items-start gap-1 text-muted-foreground">
-                          <AlertCircle className="h-3 w-3 mt-0.5 shrink-0 text-accent" />
-                          <span>Unmatched items: {orderParseResult.unmatched.join(", ")}. These items were not found in the menu.</span>
+                {/* POS API Connection Form — inside Yes path */}
+                {selectedPOS && selectedPOS !== "none" && (
+                  <div className="space-y-4">
+                    <div className="glass-card p-6">
+                      <div className="flex items-center gap-2 mb-4">
+                        <span className="text-lg">{POS_DEFAULTS[selectedPOS]?.icon || "⚙️"}</span>
+                        <div>
+                          <h3 className="text-sm font-semibold">Connect {POS_DEFAULTS[selectedPOS]?.label || "POS"}</h3>
+                          <p className="text-[10px] text-muted-foreground">Connect your POS system to automatically sync menu and sales data.</p>
                         </div>
-                      )}
+                      </div>
+
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">API Base URL *</label>
+                          <input type="text" value={posForm.apiBaseUrl} onChange={(e) => setPosForm({ ...posForm, apiBaseUrl: e.target.value })}
+                            placeholder="https://api.example.com/v1" className="mt-1 w-full rounded-xl border border-border bg-card py-2 px-3 text-sm font-mono outline-none focus:ring-2 focus:ring-primary/20" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">API Key / Token *</label>
+                          <input type="password" value={posForm.apiKey} onChange={(e) => setPosForm({ ...posForm, apiKey: e.target.value })}
+                            placeholder="Enter your API key" className="mt-1 w-full rounded-xl border border-border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20" />
+                        </div>
+                        {(selectedPOS !== "urbanpiper") && (
+                          <div>
+                            <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Restaurant ID {selectedPOS === "other" ? "" : "*"}</label>
+                            <input type="text" value={posForm.restaurantId} onChange={(e) => setPosForm({ ...posForm, restaurantId: e.target.value })}
+                              placeholder="e.g. REST-12345" className="mt-1 w-full rounded-xl border border-border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20" />
+                          </div>
+                        )}
+                        {(selectedPOS === "posist" || selectedPOS === "urbanpiper") && (
+                          <div>
+                            <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Secret Key *</label>
+                            <input type="password" value={posForm.secretKey} onChange={(e) => setPosForm({ ...posForm, secretKey: e.target.value })}
+                              placeholder="Enter secret key" className="mt-1 w-full rounded-xl border border-border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20" />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Connection Test */}
+                      <div className="mt-5 flex items-center gap-3">
+                        <button onClick={handleTestConnection} disabled={posConnecting}
+                          className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-xs font-semibold text-primary-foreground transition-all hover:brightness-110 disabled:opacity-50">
+                          {posConnecting ? (
+                            <><span className="h-3 w-3 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" /> Testing...</>
+                          ) : (
+                            <><Sparkles className="h-3.5 w-3.5" /> Test Connection</>
+                          )}
+                        </button>
+
+                        {posConnectionResult && (
+                          <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className="flex-1">
+                            <div className={`flex items-start gap-2 rounded-lg p-3 text-xs ${posConnectionResult.success ? "bg-success/5 text-success" : "bg-destructive/5 text-destructive"}`}>
+                              {posConnectionResult.success ? <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" /> : <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />}
+                              <div>
+                                <p className="font-semibold">{posConnectionResult.message}</p>
+                                {posConnectionResult.restaurantName && <p className="text-muted-foreground mt-0.5">Restaurant: {posConnectionResult.restaurantName}</p>}
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
+                      </div>
                     </div>
-                  )}
+
+                    {/* Sync UI — shown after successful connection */}
+                    {posConnectionResult?.success && (
+                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+                        {/* Menu Sync */}
+                        <div className="glass-card p-5">
+                          <div className="flex items-center gap-2 mb-3">
+                            <Upload className="h-4 w-4 text-primary" />
+                            <h3 className="text-sm font-semibold">Menu Sync</h3>
+                            {menuSyncDone && <CheckCircle2 className="ml-auto h-4 w-4 text-success" />}
+                          </div>
+                          {!menuSyncDone ? (
+                            <button onClick={handleMenuSync} disabled={menuSyncing}
+                              className="inline-flex items-center gap-2 rounded-xl bg-secondary px-4 py-2 text-xs font-semibold text-foreground transition-all hover:bg-secondary/80 disabled:opacity-50">
+                              {menuSyncing ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-foreground border-t-transparent" /> Fetching menu...</> : "Fetch Menu from POS"}
+                            </button>
+                          ) : (
+                            <p className="text-xs text-success font-medium">✓ {menuItems.length} menu items synced successfully</p>
+                          )}
+                        </div>
+
+                        {/* Order Sync */}
+                        <div className="glass-card p-5">
+                          <div className="flex items-center gap-2 mb-3">
+                            <ShoppingCart className="h-4 w-4 text-accent" />
+                            <h3 className="text-sm font-semibold">Order History Sync</h3>
+                            {orderSyncDone && <CheckCircle2 className="ml-auto h-4 w-4 text-success" />}
+                          </div>
+                          {!orderSyncDone ? (
+                            <button onClick={handleOrderSync} disabled={orderSyncing || !menuSyncDone}
+                              className="inline-flex items-center gap-2 rounded-xl bg-secondary px-4 py-2 text-xs font-semibold text-foreground transition-all hover:bg-secondary/80 disabled:opacity-50">
+                              {orderSyncing ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-foreground border-t-transparent" /> Fetching orders...</> : "Fetch Order History"}
+                            </button>
+                          ) : (
+                            <p className="text-xs text-success font-medium">✓ {orders.length} orders synced successfully</p>
+                          )}
+                          {!menuSyncDone && <p className="text-[10px] text-muted-foreground mt-1">Sync menu first before importing orders.</p>}
+                        </div>
+
+                        {/* Auto-Sync Toggle */}
+                        <div className="glass-card p-5">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <h3 className="text-sm font-semibold">Enable Automatic POS Sync</h3>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">Automatically fetch new orders every {posForm.syncInterval} minutes</p>
+                            </div>
+                            <button onClick={() => setPosForm(prev => ({ ...prev, autoSync: !prev.autoSync }))}
+                              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${posForm.autoSync ? "bg-primary" : "bg-border"}`}>
+                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow-sm ${posForm.autoSync ? "translate-x-6" : "translate-x-1"}`} />
+                            </button>
+                          </div>
+                          {posForm.autoSync && (
+                            <div className="mt-3 flex items-center gap-2">
+                              <label className="text-[10px] font-semibold text-muted-foreground">Sync interval (minutes):</label>
+                              <input type="number" min="1" max="60" value={posForm.syncInterval} onChange={(e) => setPosForm({ ...posForm, syncInterval: Math.max(1, Number(e.target.value)) })}
+                                className="w-16 rounded-lg border border-border bg-card py-1 px-2 text-sm font-semibold text-center outline-none focus:ring-1 focus:ring-primary/20" />
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </div>
+                )}
+
+                {/* CSV Upload — also available inside Yes path */}
+                <div className="glass-card p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Upload className="h-4 w-4 text-muted-foreground" />
+                    <h3 className="text-sm font-semibold">Or upload Excel / CSV</h3>
+                  </div>
+                  <p className="text-xs text-muted-foreground mb-3">Upload a file with menu items or sales data. AI will auto-detect the format.</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => handleFileDrop(e, "menu")}
+                      className="relative flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-4 transition-colors hover:border-primary/40"
+                    >
+                      <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
+                      <p className="mt-1 text-[11px] font-medium text-center">{menuFile ? menuFile.name : "Menu Data"}</p>
+                      <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "menu")} className="absolute inset-0 cursor-pointer opacity-0" />
+                    </div>
+                    <div
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => handleFileDrop(e, "order")}
+                      className="relative flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-4 transition-colors hover:border-primary/40"
+                    >
+                      <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
+                      <p className="mt-1 text-[11px] font-medium text-center">{orderFile ? orderFile.name : "Order Data"}</p>
+                      <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "order")} className="absolute inset-0 cursor-pointer opacity-0" />
+                    </div>
+                  </div>
+                  {menuParseResult && menuParseResult.count > 0 && <p className="mt-2 text-xs text-success">✓ {menuParseResult.count} menu items extracted</p>}
+                  {orderParseResult && orderParseResult.count > 0 && <p className="mt-1 text-xs text-success">✓ {orderParseResult.count} orders extracted</p>}
                 </div>
               </motion.div>
             )}
 
-            {/* NO PATH — Manual Entry (Enhanced) */}
-            {usesPOS === false && (
+            {/* NO POS PATH — CSV Upload + Manual Entry (existing flow, unchanged) */}
+            {selectedPOS === "none" && (
               <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="space-y-5">
                 <div className="insight-card">
                   <div className="flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-accent" /><span className="text-xs font-semibold text-accent">No POS? No problem.</span></div>
@@ -466,7 +707,7 @@ const RestaurantSetup = () => {
                     <div>
                       <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Category *</label>
                       <select id="setup-item-cat" value={manualItem.category} onChange={(e) => { setManualItem({ ...manualItem, category: e.target.value }); if (e.target.value) setManualItemErrors(p => ({ ...p, category: "" })); }}
-                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); /* submit */ const btn = document.getElementById("setup-add-item-btn"); if (btn) btn.click(); } }}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); const btn = document.getElementById("setup-add-item-btn"); if (btn) btn.click(); } }}
                         className={`mt-1 w-full appearance-none rounded-xl border bg-card py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 ${manualItemErrors.category ? 'border-destructive' : 'border-border'}`}>
                         <option value="">Select</option>
                         {setupCategoryOptions.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -598,13 +839,27 @@ const RestaurantSetup = () => {
             )}
 
             {/* Navigation */}
-            {usesPOS !== null && (
+            {selectedPOS !== null && (
               <div className="flex gap-3">
                 <button onClick={() => setStep(1)} className="rounded-xl border border-border px-5 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary">Back</button>
                 <button onClick={() => {
                   if (menuItems.length === 0) {
                     toast.error("Add at least one menu item", { description: "You need menu items before the AI engine can analyze your data." });
                     return;
+                  }
+                  // Save POS config if connected
+                  if (selectedPOS && selectedPOS !== "none" && posConnectionResult?.success) {
+                    updatePOSConfig({
+                      posType: selectedPOS as any,
+                      apiBaseUrl: posForm.apiBaseUrl,
+                      apiKey: posForm.apiKey,
+                      restaurantId: posForm.restaurantId,
+                      secretKey: posForm.secretKey,
+                      autoSync: posForm.autoSync,
+                      syncIntervalMinutes: posForm.syncInterval,
+                      connected: true,
+                      lastSyncAt: new Date().toISOString(),
+                    });
                   }
                   setStep(3);
                 }} className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:brightness-110">

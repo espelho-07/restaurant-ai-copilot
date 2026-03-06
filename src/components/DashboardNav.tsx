@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { BarChart3, Brain, Mic, Utensils, Layers, FileText, Home, Settings, ShoppingCart, PackageOpen, LayoutDashboard } from "lucide-react";
+import { BarChart3, Brain, Mic, Utensils, Layers, FileText, Home, Settings, ShoppingCart, PackageOpen, LayoutDashboard, Globe } from "lucide-react";
 import { useRestaurantData } from "@/lib/restaurantData";
 
 const navItems = [
@@ -11,6 +11,7 @@ const navItems = [
   { label: "Order Logs", path: "/orders", icon: PackageOpen },
   { label: "Combo Engine", path: "/combos", icon: Layers },
   { label: "Voice Copilot", path: "/voice", icon: Mic },
+  { label: "Platform Settings", path: "/platform-settings", icon: Globe },
   { label: "Insights", path: "/insights", icon: FileText },
 ];
 

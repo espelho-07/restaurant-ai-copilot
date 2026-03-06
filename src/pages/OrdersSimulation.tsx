@@ -1,6 +1,7 @@
 import { DashboardNav } from "@/components/DashboardNav";
 import { motion } from "framer-motion";
 import { ShoppingCart, Plus, Minus, Trash2, Sparkles, CheckCircle2, Zap } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useState, useMemo } from "react";
 import { useRestaurantData } from "@/lib/restaurantData";
 import { calculateMargin, calculateOnlineMargin, getOrderCountForItem } from "@/lib/aiEngine";
@@ -8,6 +9,7 @@ import type { OrderItem, SalesChannel } from "@/lib/types";
 import { toast } from "sonner";
 
 const OrdersSimulation = () => {
+    const navigate = useNavigate();
     const { menuItems, orders, commissions, addOrder, totalOrders } = useRestaurantData();
     const [cart, setCart] = useState<OrderItem[]>([]);
     const [orderCount, setOrderCount] = useState(0);
@@ -103,6 +105,7 @@ const OrdersSimulation = () => {
         setCart([]);
         toast.success(`Order ${order.id} generated!`, {
             description: `₹${order.total} via ${channel} · ${order.margin.toFixed(0)}% margin`,
+            action: { label: "View in Order Logs →", onClick: () => navigate("/orders") },
         });
     };
 
