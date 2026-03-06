@@ -1,7 +1,8 @@
 import { Link, useLocation } from "react-router-dom";
-import { Brain, Globe, Home, LayoutDashboard, Layers, PackageOpen, Settings, ShoppingCart, Utensils, FileText, LogOut } from "lucide-react";
+import { Brain, Globe, Home, LayoutDashboard, Layers, PackageOpen, Settings, ShoppingCart, Utensils, FileText, LogOut, Menu, X, Phone } from "lucide-react";
 import { useRestaurantData } from "@/lib/restaurantData";
 import { useAuth } from "@/components/AuthProvider";
+import { useMemo, useState } from "react";
 
 const navItems = [
   { label: "Home", path: "/", icon: Home },
@@ -11,38 +12,46 @@ const navItems = [
   { label: "POS Simulator", path: "/pos", icon: ShoppingCart },
   { label: "Order Logs", path: "/orders", icon: PackageOpen },
   { label: "Combo Engine", path: "/combos", icon: Layers },
-  { label: "Call Agent", path: "/voice", icon: ShoppingCart },
+  { label: "Call Agent", path: "/voice", icon: Phone },
   { label: "Platform Settings", path: "/platform-settings", icon: Globe },
   { label: "Insights", path: "/insights", icon: FileText },
 ];
+
+function isActivePath(currentPath: string, itemPath: string): boolean {
+  if (itemPath === "/") return currentPath === "/";
+  return currentPath === itemPath || currentPath.startsWith(`${itemPath}/`);
+}
 
 export function DashboardNav() {
   const location = useLocation();
   const { profile } = useRestaurantData();
   const { user, signOut } = useAuth();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
-  const visibleNavItems = navItems.filter((item) => {
+  const visibleNavItems = useMemo(() => navItems.filter((item) => {
     if (item.path === "/setup" && profile.setupComplete) return false;
     return true;
-  });
+  }), [profile.setupComplete]);
 
   const badgeName = profile.name || user?.email?.split("@")[0] || "Guest";
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-border/10 bg-background/80 backdrop-blur-xl shadow-sm">
-      <div className="flex h-16 items-center justify-between px-6">
-        <Link to="/" className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 shadow-md">
-            <Brain className="h-5 w-5 text-primary-foreground" />
-          </div>
-          <span className="font-display text-lg font-bold tracking-tight">
-            Revenue<span className="text-primary">Copilot</span>
-          </span>
-        </Link>
+    <header className="sticky top-0 z-50 w-full border-b border-border/30 bg-background/95 backdrop-blur-xl shadow-sm">
+      <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <Link to="/" className="flex items-center gap-2.5" onClick={() => setMobileOpen(false)}>
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 shadow-md">
+              <Brain className="h-5 w-5 text-primary-foreground" />
+            </div>
+            <span className="truncate font-display text-base font-bold tracking-tight sm:text-lg">
+              Revenue<span className="text-primary">Copilot</span>
+            </span>
+          </Link>
+        </div>
 
-        <nav className="hidden xl:flex items-center gap-1 overflow-x-auto no-scrollbar mask-edges">
+        <nav className="hidden flex-1 items-center justify-center gap-1 lg:flex">
           {visibleNavItems.map((item) => {
-            const active = location.pathname === item.path;
+            const active = isActivePath(location.pathname, item.path);
             return (
               <Link
                 key={item.path}
@@ -56,12 +65,12 @@ export function DashboardNav() {
           })}
         </nav>
 
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 rounded-full border border-border/50 bg-secondary/30 pl-3 pr-1 py-1">
-            <span className="text-xs font-semibold text-foreground/80 hidden sm:inline-block">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="hidden items-center gap-2 rounded-full border border-border/50 bg-secondary/30 py-1 pl-3 pr-1 sm:flex">
+            <span className="max-w-[120px] truncate text-xs font-semibold text-foreground/80">
               {badgeName}
             </span>
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold shadow-sm">
+            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground shadow-sm">
               {badgeName.charAt(0).toUpperCase()}
             </div>
           </div>
@@ -69,7 +78,7 @@ export function DashboardNav() {
           {user ? (
             <button
               onClick={() => signOut()}
-              className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-secondary transition-colors"
+              className="hidden items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary sm:inline-flex"
             >
               <LogOut className="h-3.5 w-3.5" />
               Log out
@@ -77,13 +86,69 @@ export function DashboardNav() {
           ) : (
             <Link
               to="/login"
-              className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-secondary transition-colors"
+              className="hidden items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary sm:inline-flex"
             >
               Sign in
             </Link>
           )}
+
+          <button
+            onClick={() => setMobileOpen((prev) => !prev)}
+            className="inline-flex items-center justify-center rounded-lg border border-border p-2 text-muted-foreground transition-colors hover:bg-secondary lg:hidden"
+            aria-label="Toggle navigation menu"
+          >
+            {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+          </button>
         </div>
       </div>
+
+      {mobileOpen && (
+        <div className="border-t border-border/30 bg-background/95 px-4 py-3 lg:hidden">
+          <nav className="grid grid-cols-1 gap-1">
+            {visibleNavItems.map((item) => {
+              const active = isActivePath(location.pathname, item.path);
+              return (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  onClick={() => setMobileOpen(false)}
+                  className={active ? "nav-pill-active justify-start" : "nav-pill-inactive justify-start"}
+                >
+                  <item.icon className="mr-1.5 inline h-3.5 w-3.5" />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </nav>
+
+          <div className="mt-3 flex items-center justify-between rounded-xl border border-border/40 bg-secondary/20 p-2.5">
+            <div className="min-w-0">
+              <p className="truncate text-xs font-semibold">{badgeName}</p>
+              <p className="text-[10px] text-muted-foreground">Signed-in workspace</p>
+            </div>
+            {user ? (
+              <button
+                onClick={() => {
+                  setMobileOpen(false);
+                  signOut();
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-semibold text-muted-foreground"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                Logout
+              </button>
+            ) : (
+              <Link
+                to="/login"
+                onClick={() => setMobileOpen(false)}
+                className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-semibold text-muted-foreground"
+              >
+                Sign in
+              </Link>
+            )}
+          </div>
+        </div>
+      )}
     </header>
   );
 }

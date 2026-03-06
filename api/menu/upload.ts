@@ -23,7 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         selling_price: parseNumber(item?.price ?? item?.selling_price, 0),
         food_cost: parseNumber(item?.cost ?? item?.food_cost, 0),
       }))
-      .filter((item: any) => item.item_name.length > 0);
+      .filter((item: any) => item.item_name.length > 0 && item.item_name.length <= 120 && item.category.length <= 80);
 
     if (formatted.length === 0) return res.status(400).json({ error: "No valid menu items provided" });
 

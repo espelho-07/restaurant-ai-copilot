@@ -150,6 +150,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: "Expected non-empty items array" });
       }
+      if (items.length > 150) {
+        return res.status(400).json({ error: "Too many items in one order" });
+      }
+
+      const allowedChannels = new Set(["OFFLINE", "ZOMATO", "SWIGGY", "CALL", "OTHER"]);
+      const normalizedChannel = String(channel || "OFFLINE").toUpperCase();
 
       const orderNumber = incomingOrderNumber || await getNextOrderNumber(restaurantId);
       const orderId = incomingOrderId || `#${orderNumber}`;
@@ -167,9 +173,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         restaurant_id: restaurantId,
         order_id: orderId,
         order_number: orderNumber,
-        item_name: String(item.name || "").trim(),
+        item_name: String(item.name || "").trim().slice(0, 120),
         quantity: Math.max(1, parseNumber(item.qty ?? item.quantity, 1)),
-        channel: String(channel || "OFFLINE").toUpperCase(),
+        channel: allowedChannels.has(normalizedChannel) ? normalizedChannel : "OFFLINE",
         timestamp,
         delivery_address: deliveryAddress ? String(deliveryAddress) : null,
         city: city ? String(city) : null,

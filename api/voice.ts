@@ -29,8 +29,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const session = createOrGetSession(callSid, from, to);
 
-  const twiml = buildInitialVoiceResponse(session, getBaseUrl(req));
-  await persistCallLog(session, { status: "awaiting_location" });
+  const twiml = await buildInitialVoiceResponse(session, getBaseUrl(req));
+  await persistCallLog(session, { status: "collecting_order" });
 
   res.setHeader("Content-Type", "text/xml");
   return res.status(200).send(twiml);

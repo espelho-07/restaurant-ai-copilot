@@ -103,7 +103,7 @@ const VoiceCopilot = () => {
               <Phone className="h-6 w-6 text-emerald-500" /> AI Call Ordering Agent
             </h1>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              City-based multi-restaurant call ordering with delivery address capture and sequential order numbers
+Hackathon demo mode: single restaurant voice ordering with fixed demo menu and delivery confirmation
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -153,7 +153,7 @@ const VoiceCopilot = () => {
                   <div>
                     <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Flow</label>
                     <div className="mt-1 text-[10px] text-muted-foreground leading-relaxed">
-                      {"City capture -> Top rated restaurant suggestion -> Restaurant selection -> Order capture -> Upsell/combo -> Delivery address -> Delivery charge + total -> Confirmation -> POS/KOT"}
+                      {"Greeting (demo mode) -> Order capture -> Upsell/combo -> Delivery address -> Delivery charge + total -> Confirmation -> POS/KOT"}
                     </div>
                   </div>
                 </div>
@@ -171,8 +171,8 @@ const VoiceCopilot = () => {
                   { label: "Successful Orders", value: analytics.successfulOrders, icon: CheckCircle2 },
                   { label: "Transferred", value: analytics.transferredCalls, icon: PhoneForwarded },
                   { label: "Success Rate", value: `${analytics.successRate}%`, icon: TrendingUp },
-                  { label: "Avg Order Value", value: `?${analytics.avgOrderValue}`, icon: ShoppingCart },
-                  { label: "Total Revenue", value: `?${analytics.totalRevenue}`, icon: Activity },
+                  { label: "Avg Order Value", value: `Rs.${analytics.avgOrderValue}`, icon: ShoppingCart },
+                  { label: "Total Revenue", value: `Rs.${analytics.totalRevenue}`, icon: Activity },
                 ].map((stat, i) => (
                   <motion.div key={i} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} className="glass-card p-4 text-center">
                     <stat.icon className="h-4 w-4 mx-auto text-muted-foreground mb-1.5" />
@@ -191,7 +191,7 @@ const VoiceCopilot = () => {
               <MessageSquare className="h-4 w-4 text-emerald-500" /> Recent Call Activity
             </h2>
             <span className="text-[10px] text-muted-foreground">
-              {loading ? "Loading..." : `${calls.length} call${calls.length !== 1 ? "s" : ""}`} · Auto-refreshes every 15s
+              {loading ? "Loading..." : `${calls.length} call${calls.length !== 1 ? "s" : ""}`} ï¿½ Auto-refreshes every 15s
             </span>
           </div>
 

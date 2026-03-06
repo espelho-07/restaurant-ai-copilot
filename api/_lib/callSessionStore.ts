@@ -67,7 +67,7 @@ export function createOrGetSession(callSid: string, callerPhone: string, toPhone
     startedAt: nowIso(),
     updatedAt: nowIso(),
     language: "en-IN",
-    status: "awaiting_location",
+    status: "collecting_order",
     currentItems: [],
     transcript: [],
     failureCount: 0,

@@ -82,6 +82,7 @@ interface RestaurantDataContextType {
     addCommission: (label: string, commissionPct: number) => Promise<void>;
     removeCommission: (label: string) => Promise<void>;
     getCommission: (channel: SalesChannel) => number;
+    reloadOrders: () => Promise<void>;
     totalRevenue: number;
     totalOrders: number;
     avgOrderValue: number;
@@ -475,6 +476,7 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
                 addCommission,
                 removeCommission,
                 getCommission,
+                reloadOrders: refreshOrders,
                 totalRevenue: totals.totalRevenue,
                 totalOrders: totals.totalOrders,
                 avgOrderValue: totals.avgOrderValue,

@@ -14,6 +14,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const orders = req.body;
     if (!Array.isArray(orders)) return res.status(400).json({ error: "Expected array of orders" });
+    if (orders.length > 5000) return res.status(400).json({ error: "Too many rows in one request (max 5000)" });
+
+    const allowedChannels = new Set(["OFFLINE", "ZOMATO", "SWIGGY", "CALL", "OTHER"]);
 
     const formatted = orders
       .map((order: any) => {
@@ -23,14 +26,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const deliveryCharge = parseNumber(order?.delivery_charge, 0);
         const totalAmount = parseNumber(order?.total_amount, foodTotal + deliveryCharge);
 
+        const parsedTimestamp = new Date(String(order?.timestamp || new Date().toISOString()));
+        const safeTimestamp = Number.isNaN(parsedTimestamp.getTime()) ? new Date().toISOString() : parsedTimestamp.toISOString();
+        const normalizedChannel = String(order?.channel || "OFFLINE").toUpperCase();
+
         return {
           restaurant_id: restaurantId,
           order_id: String(order?.order_id || order?.id || `#${Date.now()}`).trim(),
           order_number: parseNumber(order?.order_number, 0) || null,
-          item_name: String(order?.name || order?.item_name || "").trim(),
+          item_name: String(order?.name || order?.item_name || "").trim().slice(0, 120),
           quantity: qty,
-          channel: String(order?.channel || "OFFLINE").toUpperCase(),
-          timestamp: String(order?.timestamp || new Date().toISOString()),
+          channel: allowedChannels.has(normalizedChannel) ? normalizedChannel : "OFFLINE",
+          timestamp: safeTimestamp,
           delivery_address: order?.delivery_address ? String(order.delivery_address) : null,
           city: order?.city ? String(order.city) : null,
           pincode: order?.pincode ? String(order.pincode) : null,

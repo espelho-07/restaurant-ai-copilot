@@ -108,7 +108,7 @@ function asCallFlowStatus(value: unknown): CallFlowStatus {
   ) {
     return v;
   }
-  return "awaiting_location";
+  return "collecting_order";
 }
 
 async function isCallAlreadyClosed(callSid: string): Promise<boolean> {
@@ -211,12 +211,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     session.toPhone = to;
   }
 
-  const speechResult = body.SpeechResult || "";
+  const speechResult = String(body.SpeechResult || "").trim();
+  const confidence = toNumber(body.Confidence, 1);
+  const effectiveSpeech = confidence < 0.25 ? "" : speechResult;
 
   try {
     const turn = await processSpeechTurn({
       session,
-      speechResult,
+      speechResult: effectiveSpeech,
       baseUrl: getBaseUrl(req),
     });
 

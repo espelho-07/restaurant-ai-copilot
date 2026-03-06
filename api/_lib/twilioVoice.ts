@@ -148,7 +148,10 @@ function gatherPrompt(response: InstanceType<typeof VoiceResponse>, prompt: stri
     input: ["speech"],
     method: "POST",
     action: `${baseUrl}/api/process-order`,
+    actionOnEmptyResult: true,
+    timeout: 4,
     speechTimeout: "auto",
+    speechModel: "phone_call",
     language,
   });
   gather.say({ language }, cleanForSpeech(prompt));
@@ -212,6 +215,50 @@ export async function findRestaurantsByLocation(locationInput: string): Promise<
   }
 }
 
+export async function resolveRestaurantForSession(session: CallSession): Promise<boolean> {
+  if (!hasBackendSupabaseEnv) return false;
+  if (session.restaurantId) return true;
+
+  const explicitRestaurant = String(process.env.RESTAURANT_ID || "").trim();
+  if (explicitRestaurant) {
+    const { data } = await supabase
+      .from("restaurants")
+      .select("id,name,city,area")
+      .eq("id", explicitRestaurant)
+      .limit(1)
+      .maybeSingle();
+
+    if (data?.id) {
+      session.restaurantId = String(data.id);
+      session.selectedRestaurantName = String((data as any).name || "Restaurant");
+      session.selectedCity = String((data as any).city || "") || null;
+      session.selectedArea = String((data as any).area || "") || null;
+      return true;
+    }
+  }
+
+  const normalizedTo = normalizePhone(session.toPhone || "");
+  const { data: rows } = await supabase
+    .from("restaurants")
+    .select("id,name,city,area,phone,created_at")
+    .limit(500);
+
+  const restaurantRows = (rows || []) as any[];
+  const matchedByPhone = restaurantRows.find((row) => {
+    const dbPhone = normalizePhone(String(row?.phone || ""));
+    if (!dbPhone || !normalizedTo) return false;
+    return dbPhone === normalizedTo || dbPhone.endsWith(normalizedTo) || normalizedTo.endsWith(dbPhone);
+  });
+
+  const selected = matchedByPhone || restaurantRows.sort((a, b) => String(a?.created_at || "").localeCompare(String(b?.created_at || "")))[0];
+  if (!selected?.id) return false;
+
+  session.restaurantId = String(selected.id);
+  session.selectedRestaurantName = String(selected.name || "Restaurant");
+  session.selectedCity = String(selected.city || "") || null;
+  session.selectedArea = String(selected.area || "") || null;
+  return true;
+}
 export async function fetchMenuAndOrders(restaurantId: string): Promise<{ menuItems: MenuItem[]; orders: Order[] }> {
   if (!hasBackendSupabaseEnv) return { menuItems: [], orders: [] };
 
@@ -494,33 +541,34 @@ export function buildTransferResponse(session: CallSession): string {
   return response.toString();
 }
 
-export function buildInitialVoiceResponse(session: CallSession, baseUrl: string): string {
+export async function buildInitialVoiceResponse(session: CallSession, baseUrl: string): Promise<string> {
   const response = new VoiceResponse();
-  const greeting = "Hello! Welcome to the AI restaurant ordering assistant. Which city or area are you calling from?";
+
+  const restaurantResolved = await resolveRestaurantForSession(session);
+  if (!restaurantResolved) {
+    const unavailable = "Order system is not configured for this number yet. Please call again shortly.";
+    addMessage(session, "ai", unavailable);
+    response.say({ language: session.language }, unavailable);
+    response.hangup();
+    return response.toString();
+  }
+
+  const greeting = "Hello! Welcome to the AI restaurant ordering assistant. For the hackathon demo and API limits, we are currently taking orders only for Darpan's Restro, and we are using a fixed demo menu. Please tell me your order.";
   addMessage(session, "ai", greeting);
-  session.status = "awaiting_location";
+  session.status = "collecting_order";
   gatherPrompt(response, greeting, baseUrl, session.language);
   response.redirect({ method: "POST" }, `${baseUrl}/api/process-order`);
   return response.toString();
 }
 
 function buildRetryPrompt(session: CallSession): string {
-  if (session.status === "awaiting_location") {
-    return "I did not catch your city or area. Please tell me your city again.";
-  }
-  if (session.status === "awaiting_restaurant_selection") {
-    const options = restaurantOptionsText(session.candidateRestaurants);
-    return options
-      ? `Please select one restaurant: ${options}.`
-      : "Please tell me which restaurant you would like to order from.";
-  }
   if (session.status === "awaiting_address") {
     return "Please tell your full delivery address including area and six digit pincode.";
   }
   if (session.status === "awaiting_confirmation") {
     return "Please say yes to place the order, or no to modify your order.";
   }
-  return "I did not catch that. Please repeat your order.";
+  return "I could not hear that clearly. Please repeat your order slowly.";
 }
 
 export async function processSpeechTurn(params: {
@@ -547,6 +595,14 @@ export async function processSpeechTurn(params: {
 
   session.language = chooseLanguageFromSpeech(transcript);
   addMessage(session, "user", transcript);
+
+  if (!session.restaurantId) {
+    const resolved = await resolveRestaurantForSession(session);
+    if (!resolved) {
+      session.status = "transferred";
+      return { twiml: buildTransferResponse(session) };
+    }
+  }
 
   if (session.comboPrompted && session.pendingComboItemIds.length > 0) {
     if (isAffirmative(transcript)) {
@@ -583,73 +639,6 @@ export async function processSpeechTurn(params: {
 
   if (session.upsellItemId && isNegative(transcript)) {
     session.upsellItemId = null;
-  }
-
-  if (session.status === "awaiting_location") {
-    const options = await findRestaurantsByLocation(transcript);
-
-    if (options.length === 0) {
-      session.failureCount += 1;
-      if (session.failureCount >= 3) {
-        session.status = "transferred";
-        return { twiml: buildTransferResponse(session) };
-      }
-
-      const noMatch = "I could not find restaurants in that area. Please tell your city or nearby area again.";
-      addMessage(session, "ai", noMatch);
-      gatherPrompt(response, noMatch, baseUrl, session.language);
-      return { twiml: response.toString() };
-    }
-
-    session.failureCount = 0;
-    session.selectedCity = options[0].city || transcript;
-    session.candidateRestaurants = options;
-    session.status = "awaiting_restaurant_selection";
-
-    const top = options[0];
-    const alternatives = options.slice(1).map((item) => item.name).join(" or ");
-    const cityLabel = top.city || session.selectedCity || "your area";
-    const recommendation = alternatives
-      ? `I found restaurants in ${cityLabel}. I recommend ${top.name}. You can also order from ${alternatives}. Which restaurant would you like?`
-      : `I found ${top.name} in ${cityLabel}. Would you like to order from ${top.name}?`;
-
-    addMessage(session, "ai", recommendation);
-    gatherPrompt(response, recommendation, baseUrl, session.language);
-    return { twiml: response.toString() };
-  }
-
-  if (session.status === "awaiting_restaurant_selection") {
-    const selected = chooseRestaurantCandidate(transcript, session.candidateRestaurants);
-    if (!selected) {
-      session.failureCount += 1;
-      if (session.failureCount >= 3) {
-        session.status = "transferred";
-        return { twiml: buildTransferResponse(session) };
-      }
-
-      const options = restaurantOptionsText(session.candidateRestaurants);
-      const prompt = options
-        ? `Please choose one restaurant from: ${options}.`
-        : "Please tell the restaurant name you want to order from.";
-      addMessage(session, "ai", prompt);
-      gatherPrompt(response, prompt, baseUrl, session.language);
-      return { twiml: response.toString() };
-    }
-
-    session.failureCount = 0;
-    session.restaurantId = selected.id;
-    session.selectedRestaurantName = selected.name;
-    session.selectedCity = selected.city;
-    session.selectedArea = selected.area;
-    session.status = "collecting_order";
-    session.upsellPrompted = false;
-    session.comboPrompted = false;
-    session.pendingComboItemIds = [];
-
-    const choosePrompt = `Great! What would you like to order from ${selected.name}?`;
-    addMessage(session, "ai", choosePrompt);
-    gatherPrompt(response, choosePrompt, baseUrl, session.language);
-    return { twiml: response.toString() };
   }
 
   if (session.status === "awaiting_address") {
@@ -730,15 +719,7 @@ export async function processSpeechTurn(params: {
     }
   }
 
-  if (!session.restaurantId) {
-    const relaunch = "Before ordering, please tell your city so I can find available restaurants.";
-    session.status = "awaiting_location";
-    addMessage(session, "ai", relaunch);
-    gatherPrompt(response, relaunch, baseUrl, session.language);
-    return { twiml: response.toString() };
-  }
-
-  const { menuItems, orders } = await fetchMenuAndOrders(session.restaurantId);
+  const { menuItems, orders } = await fetchMenuAndOrders(session.restaurantId || "");
 
   if (session.upsellItemId && isAffirmative(transcript)) {
     const upsellItem = menuItems.find((item) => item.id === session.upsellItemId);
@@ -820,4 +801,3 @@ export async function processSpeechTurn(params: {
   gatherPrompt(response, aiPrompt || "Please continue with your order.", baseUrl, session.language);
   return { twiml: response.toString() };
 }
-
