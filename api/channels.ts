@@ -2,11 +2,11 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getAuthContext, parseNumber, supabase } from "./_lib/auth.js";
 
 const defaultChannels = [
-  { name: "OFFLINE", commission_percentage: 0 },
-  { name: "ZOMATO", commission_percentage: 25 },
-  { name: "SWIGGY", commission_percentage: 22 },
-  { name: "CALL", commission_percentage: 0 },
-  { name: "OTHER", commission_percentage: 15 },
+  { name: "OFFLINE", commission_percentage: 0, enabled: true },
+  { name: "ZOMATO", commission_percentage: 25, enabled: true },
+  { name: "SWIGGY", commission_percentage: 22, enabled: true },
+  { name: "CALL", commission_percentage: 0, enabled: true },
+  { name: "OTHER", commission_percentage: 15, enabled: false },
 ];
 
 function normalizeChannelName(name: string): string {
@@ -21,6 +21,15 @@ function normalizeChannelName(name: string): string {
   if (["OTHER"].includes(upper)) return "OTHER";
 
   return raw;
+}
+
+function hasSchemaMismatch(errorMessage: string): boolean {
+  const msg = String(errorMessage || "").toLowerCase();
+  return (
+    msg.includes("could not find the 'restaurant_id' column") ||
+    msg.includes("column \"restaurant_id\" does not exist") ||
+    msg.includes("relation \"channels\" does not exist")
+  );
 }
 
 async function ensureDefaultChannels(restaurantId: string) {
@@ -46,18 +55,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq("restaurant_id", restaurantId)
         .order("name", { ascending: true });
 
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        if (hasSchemaMismatch(error.message)) {
+          return res.status(200).json(defaultChannels);
+        }
+        return res.status(500).json({ error: error.message });
+      }
 
       if (!rows || rows.length === 0) {
-        await ensureDefaultChannels(restaurantId);
-        const { data: seededRows, error: seededError } = await supabase
-          .from("channels")
-          .select("*")
-          .eq("restaurant_id", restaurantId)
-          .order("name", { ascending: true });
+        try {
+          await ensureDefaultChannels(restaurantId);
 
-        if (seededError) return res.status(500).json({ error: seededError.message });
-        return res.status(200).json(seededRows || []);
+          const { data: seededRows, error: seededError } = await supabase
+            .from("channels")
+            .select("*")
+            .eq("restaurant_id", restaurantId)
+            .order("name", { ascending: true });
+
+          if (seededError) {
+            if (hasSchemaMismatch(seededError.message)) {
+              return res.status(200).json(defaultChannels);
+            }
+            return res.status(500).json({ error: seededError.message });
+          }
+
+          return res.status(200).json(seededRows || defaultChannels);
+        } catch {
+          return res.status(200).json(defaultChannels);
+        }
       }
 
       return res.status(200).json(rows);
@@ -102,7 +127,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         writeError = fallback.error;
       }
 
-      if (writeError) return res.status(500).json({ error: writeError.message });
+      if (writeError) {
+        if (hasSchemaMismatch(writeError.message)) {
+          return res.status(200).json({
+            name,
+            commission_percentage: commissionPercentage,
+            enabled,
+            skipped: true,
+          });
+        }
+
+        return res.status(500).json({ error: writeError.message });
+      }
+
       return res.status(200).json(data);
     }
 
@@ -121,7 +158,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const { error } = await query;
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        if (hasSchemaMismatch(error.message)) {
+          return res.status(200).json({ success: true, skipped: true });
+        }
+        return res.status(500).json({ error: error.message });
+      }
+
       return res.status(200).json({ success: true });
     }
 
