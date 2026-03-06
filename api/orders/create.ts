@@ -6,6 +6,37 @@ function isSchemaMismatch(message: string): boolean {
   return m.includes("does not exist") || m.includes("could not find") || m.includes("schema cache");
 }
 
+function extractMissingColumn(errorMessage: string): string | null {
+  const schemaCacheMatch = errorMessage.match(/Could not find the '([^']+)' column/i);
+  if (schemaCacheMatch?.[1]) return schemaCacheMatch[1];
+
+  const doesNotExistMatch = errorMessage.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+  if (doesNotExistMatch?.[1]) return doesNotExistMatch[1];
+
+  return null;
+}
+
+async function insertOrderRowsWithFallback(rows: Record<string, unknown>[]) {
+  let mutableRows = rows.map((row) => ({ ...row }));
+
+  while (true) {
+    const { data, error } = await supabase.from("orders").insert(mutableRows).select("*");
+    if (!error) return data || [];
+
+    const missingColumn = extractMissingColumn(error.message || "");
+    if (missingColumn && Object.prototype.hasOwnProperty.call(mutableRows[0] || {}, missingColumn)) {
+      mutableRows = mutableRows.map((row) => {
+        const next = { ...row };
+        delete (next as any)[missingColumn];
+        return next;
+      });
+      continue;
+    }
+
+    throw error;
+  }
+}
+
 async function getNextOrderNumber(restaurantId: string): Promise<number> {
   try {
     const { data } = await supabase
@@ -84,15 +115,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: "No valid items provided" });
     }
 
-    const { data, error } = await supabase.from("orders").insert(formatted).select("*");
-    if (error) {
-      if (isSchemaMismatch(error.message)) {
+    try {
+      const data = await insertOrderRowsWithFallback(formatted as Record<string, unknown>[]);
+      return res.status(200).json({ order_id: orderId, order_number: orderNumber, total_amount: total, items: data || [] });
+    } catch (insertError: any) {
+      const message = String(insertError?.message || "Failed to insert order rows");
+      if (isSchemaMismatch(message)) {
         return res.status(503).json({ error: "Database schema mismatch. Run supabase_schema.sql." });
       }
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ error: message });
     }
-
-    return res.status(200).json({ order_id: orderId, order_number: orderNumber, total_amount: total, items: data || [] });
   } catch (error) {
     if (error instanceof Error) {
       const status = error.message === "Unauthorized" || error.message === "Invalid token" ? 401 : 500;
@@ -102,3 +134,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Unexpected server error" });
   }
 }
+
