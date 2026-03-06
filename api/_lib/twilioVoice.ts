@@ -1,5 +1,4 @@
 import type { VercelRequest } from "@vercel/node";
-import { createClient } from "@supabase/supabase-js";
 import * as Twilio from "twilio";
 import {
   type ConversationMessage,
@@ -9,15 +8,10 @@ import {
 } from "../../src/lib/types.js";
 import { processTranscript } from "../../src/lib/voiceEngine.js";
 import type { CallSession } from "./callSessionStore.js";
+import { hasBackendSupabaseEnv, supabase } from "./auth.js";
 
 const VoiceResponse = (Twilio as any).twiml?.VoiceResponse || (Twilio as any).default?.twiml?.VoiceResponse;
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const fallbackPhone = process.env.RESTAURANT_FALLBACK_PHONE || "";
-
-const supabase = createClient(supabaseUrl, supabaseKey);
-
 export function parseFormBody(req: VercelRequest): Record<string, string> {
   if (!req.body) return {};
 
@@ -93,6 +87,8 @@ function summarizeItems(items: OrderItem[]): string {
 }
 
 export async function resolveRestaurantId(phoneNumber: string): Promise<string | null> {
+  if (!hasBackendSupabaseEnv) return null;
+
   const explicitRestaurant = process.env.RESTAURANT_ID;
   if (explicitRestaurant) return explicitRestaurant;
 
@@ -125,6 +121,8 @@ export async function resolveRestaurantId(phoneNumber: string): Promise<string |
 }
 
 export async function fetchMenuAndOrders(restaurantId: string): Promise<{ menuItems: MenuItem[]; orders: Order[] }> {
+  if (!hasBackendSupabaseEnv) return { menuItems: [], orders: [] };
+
   const [{ data: menuRows }, { data: orderRows }] = await Promise.all([
     supabase
       .from("menu_items")
@@ -209,6 +207,10 @@ export async function fetchMenuAndOrders(restaurantId: string): Promise<{ menuIt
 }
 
 async function insertCallOrder(restaurantId: string, session: CallSession): Promise<{ orderId: string; total: number }> {
+  if (!hasBackendSupabaseEnv) {
+    throw new Error("Server Supabase env is not configured");
+  }
+
   const orderId = `CALL-${Date.now()}`;
   const timestamp = new Date().toISOString();
   const rows = session.currentItems.map((item) => ({
@@ -230,6 +232,8 @@ async function insertCallOrder(restaurantId: string, session: CallSession): Prom
 }
 
 export async function persistCallLog(session: CallSession, extras?: { status?: string; total?: number; orderId?: string; transferred?: boolean }): Promise<void> {
+  if (!hasBackendSupabaseEnv) return;
+
   try {
     await supabase.from("call_logs").upsert({
       call_sid: session.callSid,
@@ -421,10 +425,4 @@ export async function processSpeechTurn(params: {
   gatherPrompt(response, aiPrompt || "Please continue with your order.", baseUrl, session.language);
   return { twiml: response.toString() };
 }
-
-
-
-
-
-
 

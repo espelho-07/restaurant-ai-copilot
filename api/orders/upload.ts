@@ -1,6 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getAuthContext, parseNumber, supabase } from "../_lib/auth.js";
 
+function isSchemaMismatch(message: string): boolean {
+  const m = String(message || "").toLowerCase();
+  return m.includes("does not exist") || m.includes("could not find") || m.includes("schema cache");
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -24,7 +29,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (formatted.length === 0) return res.status(400).json({ error: "No valid orders provided" });
 
     const { data, error } = await supabase.from("orders").insert(formatted).select("id");
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) {
+      if (isSchemaMismatch(error.message)) {
+        return res.status(503).json({ error: "Database schema mismatch. Run supabase_schema.sql." });
+      }
+      return res.status(500).json({ error: error.message });
+    }
 
     return res.status(200).json({ count: data?.length || 0 });
   } catch (error) {

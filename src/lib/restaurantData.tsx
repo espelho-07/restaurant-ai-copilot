@@ -26,7 +26,7 @@ const defaultProfile: RestaurantProfile = {
 const defaultCommissions: ChannelCommission[] = [
     { channel: "OFFLINE", label: "Offline / Dine-in", commissionPct: 0, enabled: true },
     { channel: "ZOMATO", label: "Zomato", commissionPct: 25, enabled: true },
-    { channel: "SWIGGY", label: "Swiggy", commissionPct: 22, enabled: true },
+    { channel: "SWIGGY", label: "Swiggy", commissionPct: 25, enabled: true },
     { channel: "CALL", label: "Phone Orders", commissionPct: 0, enabled: true },
     { channel: "OTHER", label: "Other Online", commissionPct: 15, enabled: false },
 ];

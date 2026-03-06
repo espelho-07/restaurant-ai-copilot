@@ -5,6 +5,7 @@ import {
   deleteSession,
   getSession,
 } from "./_lib/callSessionStore.js";
+import { hasBackendSupabaseEnv } from "./_lib/auth.js";
 import {
   getBaseUrl,
   parseFormBody,
@@ -19,6 +20,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   cleanupExpiredSessions();
+
+  if (!hasBackendSupabaseEnv) {
+    res.setHeader("Content-Type", "text/xml");
+    return res.status(200).send(
+      '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Order system is temporarily unavailable. Please call again shortly.</Say><Hangup/></Response>',
+    );
+  }
 
   const body = parseFormBody(req);
   const callSid = body.CallSid || body.callSid;
@@ -72,6 +80,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say>We are transferring you to restaurant staff now.</Say><Dial>${process.env.RESTAURANT_FALLBACK_PHONE || ""}</Dial></Response>`);
   }
 }
-
-
-

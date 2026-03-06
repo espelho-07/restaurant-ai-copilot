@@ -4,7 +4,7 @@ import { getAuthContext, parseNumber, supabase } from "./_lib/auth.js";
 const defaultChannels = [
   { name: "OFFLINE", commission_percentage: 0, enabled: true },
   { name: "ZOMATO", commission_percentage: 25, enabled: true },
-  { name: "SWIGGY", commission_percentage: 22, enabled: true },
+  { name: "SWIGGY", commission_percentage: 25, enabled: true },
   { name: "CALL", commission_percentage: 0, enabled: true },
   { name: "OTHER", commission_percentage: 15, enabled: false },
 ];

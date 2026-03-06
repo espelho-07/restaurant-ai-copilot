@@ -177,7 +177,7 @@ export async function parseOrderCSV(
         const targetData = pickSheet(sheets, ["order id", "quantity", "qty", "item name", "timestamp"]);
 
         const errors: string[] = [];
-        const orderMap = new Map<string, { items: OrderItem[]; timestamp: Date; channel: "OFFLINE" | "ZOMATO" | "SWIGGY" | "OTHER" }>();
+        const orderMap = new Map<string, { items: OrderItem[]; timestamp: Date; channel: "OFFLINE" | "ZOMATO" | "SWIGGY" | "OTHER" | "CALL" }>();
         const unmatchedSet = new Set<string>();
         let matchedItems = 0;
 
@@ -206,12 +206,13 @@ export async function parseOrderCSV(
                 errors.push(`Row ${rowNum}: Invalid timestamp \"${timestampStr}\", current time used`);
             }
 
-            let channel: "OFFLINE" | "ZOMATO" | "SWIGGY" | "OTHER" = "OFFLINE";
+            let channel: "OFFLINE" | "ZOMATO" | "SWIGGY" | "OTHER" | "CALL" = "OFFLINE";
             if (channelStr) {
                 const ch = channelStr.toUpperCase().trim();
                 if (ch.includes("ZOMATO")) channel = "ZOMATO";
                 else if (ch.includes("SWIGGY")) channel = "SWIGGY";
-                else if (["OTHER", "OTHER ONLINE", "CALL", "PHONE"].some((token) => ch.includes(token))) channel = "OTHER";
+                else if (["CALL", "PHONE"].some((token) => ch.includes(token))) channel = "CALL";
+                else if (["OTHER", "OTHER ONLINE"].some((token) => ch.includes(token))) channel = "OTHER";
                 else if (["OFFLINE", "DINE-IN", "DINEIN", "DINE IN"].some((token) => ch.includes(token))) channel = "OFFLINE";
                 else channel = "OTHER";
             }
@@ -279,3 +280,5 @@ export async function parseOrderCSV(
         };
     }
 }
+
+

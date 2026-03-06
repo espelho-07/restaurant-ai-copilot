@@ -64,6 +64,8 @@ const VoiceCopilot = () => {
   const [showSetup, setShowSetup] = useState(false);
 
   const analytics = computeAnalytics(calls);
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const voiceWebhookUrl = `${origin}/api/voice`;
 
   // Fetch real call data
   useEffect(() => {
@@ -130,7 +132,7 @@ const VoiceCopilot = () => {
                   <div>
                     <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Voice Webhook URL</label>
                     <div className="mt-1 rounded-lg bg-[#0d1117] px-3 py-2 font-mono text-emerald-400 text-[11px] select-all">
-                      https://your-domain.vercel.app/api/voice
+                      {voiceWebhookUrl || "https://<your-domain>/api/voice"}
                     </div>
                   </div>
                   <div>
@@ -213,7 +215,7 @@ const VoiceCopilot = () => {
               <Phone className="mx-auto h-12 w-12 text-muted-foreground/20 mb-4" />
               <h3 className="text-sm font-bold text-muted-foreground">No Calls Yet</h3>
               <p className="mt-2 text-xs text-muted-foreground/70 max-w-sm mx-auto leading-relaxed">
-                Configure your Twilio phone number to point to <code className="bg-secondary px-1.5 py-0.5 rounded text-[10px]">/api/voice</code> as the webhook URL.
+                Configure your Twilio phone number to point to <code className="bg-secondary px-1.5 py-0.5 rounded text-[10px]">{voiceWebhookUrl || "/api/voice"}</code> as the webhook URL.
                 When a customer calls, the AI agent will handle the order automatically.
               </p>
               <button onClick={() => setShowSetup(true)}
@@ -326,3 +328,4 @@ const VoiceCopilot = () => {
 };
 
 export default VoiceCopilot;
+

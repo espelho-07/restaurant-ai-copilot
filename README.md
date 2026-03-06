@@ -18,9 +18,10 @@ Required:
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- Optional aliases: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
 Twilio call ordering:
 
@@ -54,7 +55,7 @@ For full local API + frontend behavior, run via Vercel dev in environments where
 
 ## Database Schema
 
-Run [`supabase/schema.sql`](supabase/schema.sql) to create required tables:
+Run [`supabase_schema.sql`](supabase_schema.sql) (or [`supabase/schema.sql`](supabase/schema.sql)) to create required tables:
 
 - `users`
 - `restaurants`

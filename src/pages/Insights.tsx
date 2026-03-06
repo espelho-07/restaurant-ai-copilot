@@ -20,7 +20,7 @@ import {
 } from "recharts";
 import { useMemo } from "react";
 import { useRestaurantData } from "@/lib/restaurantData";
-import { calculateMargin, getOrderCountForItem } from "@/lib/aiEngine";
+import { calculateMargin, generateComboRecommendations, getOrderCountForItem } from "@/lib/aiEngine";
 
 const colors = ["#4F46E5", "#F59E0B", "#10B981", "#8B5CF6", "#EF4444", "#06B6D4", "#94A3B8"];
 
@@ -115,13 +115,41 @@ const Insights = () => {
     return summaries.length > 0 ? summaries : ["Upload more order data to generate deeper insights."];
   }, [menuItems, orders, totalRevenue, lowPerformers]);
 
-  const comboPerformance = [
-    { metric: "AOV", A: 85, B: 70 },
-    { metric: "Orders", A: 60, B: 90 },
-    { metric: "Margin", A: 78, B: 55 },
-    { metric: "Repeat", A: 70, B: 65 },
-    { metric: "Rating", A: 90, B: 80 },
-  ];
+  const comboPerformance = useMemo(() => {
+    const combos = generateComboRecommendations(menuItems, orders).slice(0, 2);
+    const first = combos[0];
+    const second = combos[1] || combos[0];
+
+    const toRadar = (combo: typeof first | undefined) => {
+      if (!combo) {
+        return { AOV: 0, Orders: 0, Margin: 0, Repeat: 0, Confidence: 0 };
+      }
+
+      const comboCost = combo.items.reduce((sum, item) => sum + item.cost, 0);
+      const comboMargin = combo.suggestedPrice > 0
+        ? ((combo.suggestedPrice - comboCost) / combo.suggestedPrice) * 100
+        : 0;
+
+      return {
+        AOV: Math.max(0, Math.min(100, combo.aovIncrease + 40)),
+        Orders: Math.max(0, Math.min(100, (combo.coOccurrenceCount / Math.max(combo.totalOrders, 1)) * 100)),
+        Margin: Math.max(0, Math.min(100, comboMargin)),
+        Repeat: Math.max(0, Math.min(100, combo.confidence)),
+        Confidence: Math.max(0, Math.min(100, combo.confidence)),
+      };
+    };
+
+    const firstRadar = toRadar(first);
+    const secondRadar = toRadar(second);
+
+    return [
+      { metric: "AOV", A: Math.round(firstRadar.AOV), B: Math.round(secondRadar.AOV) },
+      { metric: "Orders", A: Math.round(firstRadar.Orders), B: Math.round(secondRadar.Orders) },
+      { metric: "Margin", A: Math.round(firstRadar.Margin), B: Math.round(secondRadar.Margin) },
+      { metric: "Repeat", A: Math.round(firstRadar.Repeat), B: Math.round(secondRadar.Repeat) },
+      { metric: "Confidence", A: Math.round(firstRadar.Confidence), B: Math.round(secondRadar.Confidence) },
+    ];
+  }, [menuItems, orders]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -226,3 +254,4 @@ const Insights = () => {
 };
 
 export default Insights;
+

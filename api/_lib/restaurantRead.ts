@@ -31,6 +31,18 @@ function normalizeChannel(channel: unknown): SalesChannel {
   return "OTHER";
 }
 
+function isSchemaMismatch(message: string): boolean {
+  const m = String(message || "").toLowerCase();
+  return m.includes("does not exist") || m.includes("could not find") || m.includes("schema cache");
+}
+
+const defaultCommissions: ChannelCommission[] = [
+  { channel: "OFFLINE", label: "Offline / Dine-in", commissionPct: 0, enabled: true },
+  { channel: "ZOMATO", label: "Zomato", commissionPct: 25, enabled: true },
+  { channel: "SWIGGY", label: "Swiggy", commissionPct: 25, enabled: true },
+  { channel: "CALL", label: "Phone Orders", commissionPct: 0, enabled: true },
+];
+
 export async function fetchRestaurantDataset(restaurantId: string): Promise<{
   menuItems: MenuItem[];
   orders: Order[];
@@ -54,7 +66,6 @@ export async function fetchRestaurantDataset(restaurantId: string): Promise<{
 
   if (menuError) throw new Error(menuError.message);
   if (orderError) throw new Error(orderError.message);
-  if (channelError) throw new Error(channelError.message);
 
   const menuItems: MenuItem[] = ((menuRows || []) as MenuRow[]).map((row) => ({
     id: toNumber(row.id, 0),
@@ -100,17 +111,25 @@ export async function fetchRestaurantDataset(restaurantId: string): Promise<{
     };
   });
 
-  const commissions: ChannelCommission[] = (channelRows || []).map((row: any) => {
-    const channel = normalizeChannel(row?.name);
-    const label = String(row?.name || channel);
+  let commissions: ChannelCommission[] = defaultCommissions;
 
-    return {
-      channel,
-      label,
-      commissionPct: toNumber(row?.commission_percentage, 0),
-      enabled: typeof row?.enabled === "boolean" ? row.enabled : true,
-    };
-  });
+  if (!channelError) {
+    commissions = (channelRows || []).map((row: any) => {
+      const channel = normalizeChannel(row?.name);
+      const label = String(row?.name || channel);
+
+      return {
+        channel,
+        label,
+        commissionPct: toNumber(row?.commission_percentage, 0),
+        enabled: typeof row?.enabled === "boolean" ? row.enabled : true,
+      };
+    });
+  } else if (!isSchemaMismatch(channelError.message || "")) {
+    throw new Error(channelError.message);
+  }
+
+  if (!commissions.length) commissions = defaultCommissions;
 
   return { menuItems, orders, commissions };
 }

@@ -16,6 +16,11 @@ interface MenuRow {
   id: number;
 }
 
+function isSchemaMismatch(message: string): boolean {
+  const m = String(message || "").toLowerCase();
+  return m.includes("does not exist") || m.includes("could not find") || m.includes("schema cache");
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { restaurantId } = await getAuthContext(req);
@@ -34,7 +39,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ]);
 
       if (menuError || orderError) {
-        return res.status(500).json({ error: menuError?.message || orderError?.message || "Failed to load orders" });
+        const message = menuError?.message || orderError?.message || "Failed to load orders";
+        if (isSchemaMismatch(message)) return res.status(200).json([]);
+        return res.status(500).json({ error: message });
       }
 
       const menuByName = new Map((menuRows || []).map((row: any) => [String(row.item_name).toLowerCase(), row as MenuRow]));
@@ -98,7 +105,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (rows.length === 0) return res.status(400).json({ error: "No valid order items provided" });
 
       const { error } = await supabase.from("orders").insert(rows);
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        if (isSchemaMismatch(error.message)) {
+          return res.status(503).json({ error: "Database schema mismatch. Run supabase_schema.sql." });
+        }
+        return res.status(500).json({ error: error.message });
+      }
 
       return res.status(200).json({ orderId, insertedItems: rows.length, timestamp });
     }
@@ -112,4 +124,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Unexpected server error" });
   }
 }
-

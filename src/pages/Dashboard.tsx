@@ -110,14 +110,70 @@ const Dashboard = () => {
     } catch { return 0; }
   }, [menuItems, orders]);
 
+  const trendSummary = useMemo(() => {
+    const now = Date.now();
+    const weekMs = 7 * 24 * 60 * 60 * 1000;
+
+    let currentRevenue = 0;
+    let currentOrders = 0;
+    let previousRevenue = 0;
+    let previousOrders = 0;
+
+    for (const order of orders) {
+      const ts = new Date(order.timestamp).getTime();
+      const age = now - ts;
+      if (age < 0) continue;
+
+      if (age < weekMs) {
+        currentRevenue += order.total;
+        currentOrders += 1;
+      } else if (age < weekMs * 2) {
+        previousRevenue += order.total;
+        previousOrders += 1;
+      }
+    }
+
+    const revenueChangePct = previousRevenue > 0
+      ? ((currentRevenue - previousRevenue) / previousRevenue) * 100
+      : (currentRevenue > 0 ? 100 : 0);
+
+    const currentAov = currentOrders > 0 ? currentRevenue / currentOrders : 0;
+    const previousAov = previousOrders > 0 ? previousRevenue / previousOrders : 0;
+    const aovChangePct = previousAov > 0
+      ? ((currentAov - previousAov) / previousAov) * 100
+      : (currentAov > 0 ? 100 : 0);
+
+    return { revenueChangePct, aovChangePct };
+  }, [orders]);
+
   const forecastData = useMemo(() => {
-    const base = avgOrderValue * (totalOrders || 1);
-    return Array.from({ length: 7 }, (_, i) => ({
-      week: `Week ${i + 1}`,
-      withoutAI: Math.round(base * (1 + (i * 0.01))),
-      withAI: Math.round(base * (1 + (i + 1) * 0.04))
-    }));
-  }, [avgOrderValue, totalOrders]);
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const buckets = Array.from({ length: 14 }, () => 0);
+
+    for (const order of orders) {
+      const ts = new Date(order.timestamp).getTime();
+      const ageDays = Math.floor((now - ts) / dayMs);
+      if (ageDays >= 0 && ageDays < buckets.length) {
+        buckets[ageDays] += order.total;
+      }
+    }
+
+    const last7 = buckets.slice(0, 7);
+    const previous7 = buckets.slice(7, 14);
+    const lastAvg = last7.reduce((s, v) => s + v, 0) / 7;
+    const previousAvg = previous7.reduce((s, v) => s + v, 0) / 7;
+    const growth = previousAvg > 0 ? (lastAvg - previousAvg) / previousAvg : 0;
+
+    return Array.from({ length: 7 }, (_, i) => {
+      const baseline = Math.max(0, Math.round(lastAvg * (1 + growth * i)));
+      return {
+        week: `Week ${i + 1}`,
+        withoutAI: baseline,
+        withAI: Math.round(baseline * 1.08),
+      };
+    });
+  }, [orders]);
 
   const popularityData = useMemo(() => menuItems.map((item) => ({ item: item.name, orders: getOrderCountForItem(item.id, orders) })).sort((a, b) => b.orders - a.orders).slice(0, 6), [menuItems, orders]);
 
@@ -133,12 +189,38 @@ const Dashboard = () => {
     return days.map((day) => ({ day, revenue: daySales.get(day) || 0 }));
   }, [orders]);
 
-  const metrics = [
-    { label: "Total Revenue", value: `\u20B9${totalRevenue >= 1000 ? (totalRevenue / 1000).toFixed(1) + 'K' : totalRevenue.toFixed(0)}`, change: totalOrders > 0 ? "+12.5%" : "0%", icon: DollarSign },
-    { label: "Avg Order Value", value: `\u20B9${Math.round(avgOrderValue)}`, change: totalOrders > 0 ? "+8.2%" : "0%", icon: TrendingUp },
+  const formatChange = (value: number): string => {
+    if (!Number.isFinite(value)) return "0%";
+    const rounded = Math.round(value * 10) / 10;
+    const sign = rounded > 0 ? "+" : "";
+    return `${sign}${rounded}%`;
+  };
+
+  const metrics = useMemo(() => [
+    {
+      label: "Total Revenue",
+      value: `\u20B9${totalRevenue >= 1000 ? (totalRevenue / 1000).toFixed(1) + "K" : totalRevenue.toFixed(0)}`,
+      change: formatChange(trendSummary.revenueChangePct),
+      icon: DollarSign,
+    },
+    {
+      label: "Avg Order Value",
+      value: `\u20B9${Math.round(avgOrderValue)}`,
+      change: formatChange(trendSummary.aovChangePct),
+      icon: TrendingUp,
+    },
     { label: "Top Selling Item", value: topSeller.name, sub: `${topSeller.count} orders`, icon: Star },
     { label: "Hidden Star", value: hiddenStar.name, sub: `${hiddenStar.margin}% margin`, icon: Eye },
-  ];
+  ], [
+    avgOrderValue,
+    hiddenStar.margin,
+    hiddenStar.name,
+    topSeller.count,
+    topSeller.name,
+    totalRevenue,
+    trendSummary.aovChangePct,
+    trendSummary.revenueChangePct,
+  ]);
 
   const actions = useMemo(() => priceRecs.filter(r => r.suggestedPrice !== r.currentPrice || (r.suggestedOnlinePrice && r.suggestedOnlinePrice !== r.currentPrice)).slice(0, 3).map((rec) => {
     let title = `${rec.menuItem.name}: Optimized`;
@@ -434,3 +516,6 @@ const Dashboard = () => {
 };
 
 export default Dashboard;
+
+
+

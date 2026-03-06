@@ -1,6 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getAuthContext, parseNumber, supabase } from "../_lib/auth.js";
 
+function isSchemaMismatch(message: string): boolean {
+  const m = String(message || "").toLowerCase();
+  return m.includes("does not exist") || m.includes("could not find") || m.includes("schema cache");
+}
+
 function mapMenuRow(row: any) {
   return {
     id: Number(row.id),
@@ -22,7 +27,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq("restaurant_id", restaurantId)
         .order("item_name", { ascending: true });
 
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        if (isSchemaMismatch(error.message)) return res.status(200).json([]);
+        return res.status(500).json({ error: error.message });
+      }
       return res.status(200).json((data || []).map(mapMenuRow));
     }
 
@@ -47,7 +55,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .insert(rows)
         .select("id,item_name,category,selling_price,food_cost");
 
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        if (isSchemaMismatch(error.message)) {
+          return res.status(503).json({ error: "Database schema mismatch. Run supabase_schema.sql." });
+        }
+        return res.status(500).json({ error: error.message });
+      }
       return res.status(200).json((data || []).map(mapMenuRow));
     }
 
@@ -69,7 +82,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .select("id,item_name,category,selling_price,food_cost")
         .single();
 
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        if (isSchemaMismatch(error.message)) {
+          return res.status(503).json({ error: "Database schema mismatch. Run supabase_schema.sql." });
+        }
+        return res.status(500).json({ error: error.message });
+      }
       return res.status(200).json(mapMenuRow(data));
     }
 
@@ -83,7 +101,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq("restaurant_id", restaurantId)
         .eq("id", id);
 
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        if (isSchemaMismatch(error.message)) {
+          return res.status(503).json({ error: "Database schema mismatch. Run supabase_schema.sql." });
+        }
+        return res.status(500).json({ error: error.message });
+      }
       return res.status(200).json({ success: true });
     }
 
