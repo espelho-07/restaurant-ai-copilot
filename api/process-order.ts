@@ -7,6 +7,7 @@ import {
 } from "./_lib/callSessionStore.js";
 import { hasBackendSupabaseEnv } from "./_lib/auth.js";
 import {
+  buildTransferResponse,
   getBaseUrl,
   parseFormBody,
   persistCallLog,
@@ -75,8 +76,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).send(turn.twiml);
   } catch {
     await persistCallLog(session, { status: "transferred", transferred: true });
+    session.status = "transferred";
     deleteSession(callSid);
     res.setHeader("Content-Type", "text/xml");
-    return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say>We are transferring you to restaurant staff now.</Say><Dial>${process.env.RESTAURANT_FALLBACK_PHONE || ""}</Dial></Response>`);
+    return res.status(200).send(buildTransferResponse(session));
   }
 }

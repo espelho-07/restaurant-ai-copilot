@@ -32,6 +32,14 @@ export interface AuthContext {
   restaurantId: string;
 }
 
+type RestaurantIdentityRow = {
+  id: string;
+  setup_complete?: boolean | null;
+  updated_at?: string | null;
+  created_at?: string | null;
+  name?: string | null;
+};
+
 function extractMissingColumn(errorMessage: string): string | null {
   const schemaCacheMatch = errorMessage.match(/Could not find the '([^']+)' column/i);
   if (schemaCacheMatch?.[1]) return schemaCacheMatch[1];
@@ -80,6 +88,37 @@ async function createRestaurantRow(userId: string): Promise<string> {
   }
 }
 
+function pickPreferredRestaurant(rows: RestaurantIdentityRow[]): string | null {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+
+  const scored = rows
+    .filter((row) => row?.id)
+    .map((row) => {
+      const setupScore = row.setup_complete ? 1 : 0;
+      const nameScore = row.name && String(row.name).trim().length > 0 ? 1 : 0;
+      const updatedScore = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+      const createdScore = row.created_at ? new Date(row.created_at).getTime() : 0;
+
+      return {
+        id: String(row.id),
+        setupScore,
+        nameScore,
+        updatedScore: Number.isFinite(updatedScore) ? updatedScore : 0,
+        createdScore: Number.isFinite(createdScore) ? createdScore : 0,
+      };
+    });
+
+  scored.sort((a, b) => {
+    if (b.setupScore !== a.setupScore) return b.setupScore - a.setupScore;
+    if (b.nameScore !== a.nameScore) return b.nameScore - a.nameScore;
+    if (b.updatedScore !== a.updatedScore) return b.updatedScore - a.updatedScore;
+    if (b.createdScore !== a.createdScore) return b.createdScore - a.createdScore;
+    return a.id.localeCompare(b.id);
+  });
+
+  return scored[0]?.id || null;
+}
+
 export async function getAuthContext(req: VercelRequest): Promise<AuthContext> {
   if (!hasBackendSupabaseEnv) {
     throw new Error("Server Supabase env is not configured");
@@ -99,12 +138,11 @@ export async function getAuthContext(req: VercelRequest): Promise<AuthContext> {
     throw new Error("Invalid token");
   }
 
-  const { data: existingRestaurant, error: restaurantFetchError } = await supabase
+  const { data: existingRestaurants, error: restaurantFetchError } = await supabase
     .from("restaurants")
-    .select("id")
+    .select("id,setup_complete,updated_at,created_at,name")
     .eq("user_id", user.id)
-    .limit(1)
-    .maybeSingle();
+    .limit(100);
 
   if (restaurantFetchError) {
     if (hasMissingTable(restaurantFetchError.message || "")) {
@@ -113,8 +151,9 @@ export async function getAuthContext(req: VercelRequest): Promise<AuthContext> {
     throw new Error(restaurantFetchError.message || "Failed to load restaurant profile");
   }
 
-  if (existingRestaurant?.id) {
-    return { userId: user.id, restaurantId: String(existingRestaurant.id) };
+  const preferredRestaurantId = pickPreferredRestaurant((existingRestaurants || []) as RestaurantIdentityRow[]);
+  if (preferredRestaurantId) {
+    return { userId: user.id, restaurantId: preferredRestaurantId };
   }
 
   const restaurantId = await createRestaurantRow(user.id);

@@ -246,15 +246,26 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
             setIsLoading(false);
             return;
         }
-
         setIsLoading(true);
         try {
-            await Promise.all([
+            const results = await Promise.allSettled([
                 refreshProfile(),
                 refreshMenu(),
                 refreshOrders(),
                 refreshChannels(),
             ]);
+
+            const failures = results
+                .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+                .map((result) => result.reason);
+
+            if (failures.length > 0) {
+                const first = failures[0];
+                console.error("Some restaurant data requests failed", failures);
+                toast.error("Some data failed to refresh", {
+                    description: first instanceof Error ? first.message : "Unexpected error",
+                });
+            }
         } catch (error) {
             console.error("Failed to load restaurant data", error);
             toast.error("Failed to load restaurant data", {
