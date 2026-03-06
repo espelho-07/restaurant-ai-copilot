@@ -12,6 +12,10 @@ import { hasBackendSupabaseEnv, supabase } from "./auth.js";
 
 const VoiceResponse = (Twilio as any).twiml?.VoiceResponse || (Twilio as any).default?.twiml?.VoiceResponse;
 const fallbackPhone = process.env.RESTAURANT_FALLBACK_PHONE || "";
+
+function normalizePhone(value: string): string {
+  return String(value || "").replace(/[^\d+]/g, "");
+}
 export function parseFormBody(req: VercelRequest): Record<string, string> {
   if (!req.body) return {};
 
@@ -92,15 +96,21 @@ export async function resolveRestaurantId(phoneNumber: string): Promise<string |
   const explicitRestaurant = process.env.RESTAURANT_ID;
   if (explicitRestaurant) return explicitRestaurant;
 
+  const normalizedInput = normalizePhone(phoneNumber);
+
   try {
     const { data: byPhone } = await supabase
       .from("restaurants")
-      .select("id")
-      .eq("phone", phoneNumber)
-      .limit(1)
-      .maybeSingle();
+      .select("id,phone")
+      .limit(200);
 
-    if (byPhone?.id) return String(byPhone.id);
+    const matched = (byPhone || []).find((row: any) => {
+      const dbPhone = normalizePhone(String(row?.phone || ""));
+      if (!dbPhone || !normalizedInput) return false;
+      return dbPhone === normalizedInput || dbPhone.endsWith(normalizedInput) || normalizedInput.endsWith(dbPhone);
+    });
+
+    if (matched?.id) return String(matched.id);
   } catch {
     // fall through
   }
@@ -425,4 +435,7 @@ export async function processSpeechTurn(params: {
   gatherPrompt(response, aiPrompt || "Please continue with your order.", baseUrl, session.language);
   return { twiml: response.toString() };
 }
+
+
+
 
