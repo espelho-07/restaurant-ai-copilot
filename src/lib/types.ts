@@ -29,6 +29,13 @@ export interface Order {
     margin: number;
     timestamp: Date;
     channel: SalesChannel;
+    orderNumber?: number | null;
+    deliveryAddress?: string;
+    city?: string;
+    pincode?: string;
+    foodTotal?: number;
+    deliveryCharge?: number;
+    posOrderRef?: string;
 }
 
 export interface ChannelCommission {

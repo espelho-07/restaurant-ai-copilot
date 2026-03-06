@@ -3,10 +3,18 @@ import { getAuthContext, parseNumber, supabase } from "../_lib/auth.js";
 
 interface OrderRow {
   order_id: string;
+  order_number?: number | null;
   item_name: string;
   quantity: number;
   channel: string;
   timestamp: string;
+  delivery_address?: string | null;
+  city?: string | null;
+  pincode?: string | null;
+  food_total?: number | null;
+  delivery_charge?: number | null;
+  total_amount?: number | null;
+  pos_order_ref?: string | null;
 }
 
 interface MenuRow {
@@ -21,6 +29,38 @@ function isSchemaMismatch(message: string): boolean {
   return m.includes("does not exist") || m.includes("could not find") || m.includes("schema cache");
 }
 
+async function getNextOrderNumber(restaurantId: string): Promise<number> {
+  try {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("order_number,order_id")
+      .eq("restaurant_id", restaurantId)
+      .order("order_number", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!error) {
+      const latest = parseNumber((data as any)?.order_number, 0);
+      if (latest > 0) return latest + 1;
+      const orderId = String((data as any)?.order_id || "");
+      const parsed = Number(orderId.replace(/[^\d]/g, ""));
+      if (Number.isFinite(parsed) && parsed > 0) return parsed + 1;
+    }
+  } catch {
+    // fallback below
+  }
+
+  try {
+    const { count } = await supabase
+      .from("orders")
+      .select("id", { count: "exact", head: true })
+      .eq("restaurant_id", restaurantId);
+    return Math.max(1, (count || 0) + 1);
+  } catch {
+    return 1;
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { restaurantId } = await getAuthContext(req);
@@ -33,7 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .eq("restaurant_id", restaurantId),
         supabase
           .from("orders")
-          .select("order_id,item_name,quantity,channel,timestamp")
+          .select("order_id,order_number,item_name,quantity,channel,timestamp,delivery_address,city,pincode,food_total,delivery_charge,total_amount,pos_order_ref")
           .eq("restaurant_id", restaurantId)
           .order("timestamp", { ascending: false }),
       ]);
@@ -66,18 +106,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           };
         });
 
-        const total = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+        const itemTotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
         const totalCost = items.reduce((sum, item) => sum + item.cost * item.qty, 0);
+        const foodTotal = parseNumber(rows[0]?.food_total, itemTotal);
+        const deliveryCharge = parseNumber(rows[0]?.delivery_charge, 0);
+        const total = parseNumber(rows[0]?.total_amount, foodTotal + deliveryCharge);
         const margin = total > 0 ? ((total - totalCost) / total) * 100 : 0;
 
         return {
           id: orderId,
+          orderNumber: parseNumber(rows[0]?.order_number, 0) || null,
           items,
           total,
           totalCost,
           margin,
           timestamp: rows[0]?.timestamp || new Date().toISOString(),
           channel: (rows[0]?.channel || "OFFLINE").toUpperCase(),
+          deliveryAddress: rows[0]?.delivery_address || "",
+          city: rows[0]?.city || "",
+          pincode: rows[0]?.pincode || "",
+          foodTotal,
+          deliveryCharge,
+          posOrderRef: rows[0]?.pos_order_ref || "",
         };
       });
 
@@ -85,21 +135,48 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === "POST") {
-      const { items, channel, orderId: incomingOrderId } = req.body || {};
+      const {
+        items,
+        channel,
+        orderId: incomingOrderId,
+        orderNumber: incomingOrderNumber,
+        deliveryAddress,
+        city,
+        pincode,
+        deliveryCharge,
+        totalAmount,
+      } = req.body || {};
+
       if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: "Expected non-empty items array" });
       }
 
-      const orderId = incomingOrderId || `ORD-${Date.now()}`;
+      const orderNumber = incomingOrderNumber || await getNextOrderNumber(restaurantId);
+      const orderId = incomingOrderId || `#${orderNumber}`;
       const timestamp = new Date().toISOString();
+
+      const foodTotal = items.reduce((sum: number, item: Record<string, unknown>) => {
+        const qty = Math.max(1, parseNumber(item.qty ?? item.quantity, 1));
+        const price = parseNumber(item.price, 0);
+        return sum + qty * price;
+      }, 0);
+      const appliedDelivery = parseNumber(deliveryCharge, 0);
+      const appliedTotal = parseNumber(totalAmount, foodTotal + appliedDelivery);
 
       const rows = items.map((item: Record<string, unknown>) => ({
         restaurant_id: restaurantId,
         order_id: orderId,
+        order_number: orderNumber,
         item_name: String(item.name || "").trim(),
         quantity: Math.max(1, parseNumber(item.qty ?? item.quantity, 1)),
         channel: String(channel || "OFFLINE").toUpperCase(),
         timestamp,
+        delivery_address: deliveryAddress ? String(deliveryAddress) : null,
+        city: city ? String(city) : null,
+        pincode: pincode ? String(pincode) : null,
+        food_total: foodTotal,
+        delivery_charge: appliedDelivery,
+        total_amount: appliedTotal,
       })).filter((row) => row.item_name.length > 0);
 
       if (rows.length === 0) return res.status(400).json({ error: "No valid order items provided" });
@@ -112,7 +189,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(500).json({ error: error.message });
       }
 
-      return res.status(200).json({ orderId, insertedItems: rows.length, timestamp });
+      return res.status(200).json({ orderId, orderNumber, insertedItems: rows.length, timestamp, totalAmount: appliedTotal });
     }
 
     return res.status(405).json({ error: "Method not allowed" });

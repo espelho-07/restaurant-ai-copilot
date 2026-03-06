@@ -339,3 +339,23 @@ cross join (
 on conflict (restaurant_id, name) do update
 set commission_percentage = excluded.commission_percentage,
     enabled = excluded.enabled;
+
+-- MULTI-RESTAURANT + DELIVERY EXTENSIONS -------------------------------------
+alter table public.restaurants add column if not exists city text not null default '';
+alter table public.restaurants add column if not exists area text not null default '';
+alter table public.restaurants add column if not exists total_orders int not null default 0;
+
+alter table public.orders add column if not exists order_number int;
+alter table public.orders add column if not exists delivery_address text;
+alter table public.orders add column if not exists city text;
+alter table public.orders add column if not exists pincode text;
+alter table public.orders add column if not exists food_total numeric(12, 2) not null default 0;
+alter table public.orders add column if not exists delivery_charge numeric(12, 2) not null default 0;
+alter table public.orders add column if not exists total_amount numeric(12, 2) not null default 0;
+alter table public.orders add column if not exists pos_order_ref text;
+
+create index if not exists idx_restaurants_city on public.restaurants(city);
+drop index if exists idx_restaurants_city_rating;
+create index if not exists idx_restaurants_city_orders on public.restaurants(city, total_orders desc);
+create index if not exists idx_orders_order_number on public.orders(restaurant_id, order_number desc);
+create index if not exists idx_orders_city on public.orders(city);

@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { ConversationMessage, VoiceOrderItem } from "../src/lib/types.js";
+import type { RestaurantCandidate } from "./_lib/callSessionStore.js";
 import {
   cleanupExpiredSessions,
   createOrGetSession,
@@ -15,7 +16,6 @@ import {
   parseFormBody,
   persistCallLog,
   processSpeechTurn,
-  resolveRestaurantId,
 } from "./_lib/twilioVoice.js";
 
 type CallLogStateRow = {
@@ -23,9 +23,7 @@ type CallLogStateRow = {
   language?: string | null;
   transcript?: unknown;
   order_json?: unknown;
-  failure_count?: number | null;
-  upsell_item_id?: number | null;
-  upsell_prompted?: boolean | null;
+  detected_items?: unknown;
   order_id?: string | null;
   restaurant_id?: string | null;
 };
@@ -35,10 +33,19 @@ function toNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function coerceOrderItems(raw: unknown): VoiceOrderItem[] {
-  if (!Array.isArray(raw)) return [];
+function toObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
 
-  return raw
+function coerceOrderItems(raw: unknown): VoiceOrderItem[] {
+  const source = Array.isArray(raw)
+    ? raw
+    : Array.isArray((toObject(raw) || {}).items)
+      ? ((toObject(raw) || {}).items as unknown[])
+      : [];
+
+  return source
     .map((item) => ({
       menuItemId: toNumber((item as any)?.menuItemId, 0),
       name: String((item as any)?.name || "").trim(),
@@ -74,12 +81,34 @@ function coerceTranscript(raw: unknown): ConversationMessage[] {
     .filter(Boolean) as ConversationMessage[];
 }
 
+function coerceCandidates(raw: unknown): RestaurantCandidate[] {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((entry) => ({
+      id: String((entry as any)?.id || ""),
+      name: String((entry as any)?.name || ""),
+      city: String((entry as any)?.city || ""),
+      area: String((entry as any)?.area || ""),
+      totalOrders: Math.max(0, Math.floor(toNumber((entry as any)?.totalOrders, 0))),
+    }))
+    .filter((entry) => entry.id.length > 0 && entry.name.length > 0);
+}
+
 function asCallFlowStatus(value: unknown): CallFlowStatus {
   const v = String(value || "").toLowerCase();
-  if (v === "collecting_order" || v === "awaiting_confirmation" || v === "completed" || v === "transferred") {
+  if (
+    v === "awaiting_location"
+    || v === "awaiting_restaurant_selection"
+    || v === "collecting_order"
+    || v === "awaiting_address"
+    || v === "awaiting_confirmation"
+    || v === "completed"
+    || v === "transferred"
+  ) {
     return v;
   }
-  return "collecting_order";
+  return "awaiting_location";
 }
 
 async function isCallAlreadyClosed(callSid: string): Promise<boolean> {
@@ -103,7 +132,7 @@ async function hydrateSessionFromCallLog(callSid: string): Promise<CallLogStateR
   try {
     const { data, error } = await supabase
       .from("call_logs")
-      .select("status,language,transcript,order_json,order_id,restaurant_id")
+      .select("status,language,transcript,order_json,detected_items,order_id,restaurant_id")
       .eq("call_sid", callSid)
       .limit(1)
       .maybeSingle();
@@ -152,7 +181,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Vercel serverless instances are stateless; restore in-progress call state from DB if available.
     const persisted = await hydrateSessionFromCallLog(callSid);
     if (persisted) {
+      const statePayload = toObject(persisted.detected_items) || toObject(persisted.order_json) || {};
       const sessionLanguage: "en-IN" | "hi-IN" = persisted.language === "hi-IN" ? "hi-IN" : "en-IN";
+
       const patch = {
         status: asCallFlowStatus(persisted.status),
         language: sessionLanguage,
@@ -160,15 +191,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         currentItems: coerceOrderItems(persisted.order_json),
         orderId: persisted.order_id ? String(persisted.order_id) : null,
         restaurantId: persisted.restaurant_id ? String(persisted.restaurant_id) : null,
+        selectedCity: String(statePayload.selected_city || "") || null,
+        selectedArea: String(statePayload.selected_area || "") || null,
+        selectedRestaurantName: String(statePayload.restaurant_name || "") || null,
+        candidateRestaurants: coerceCandidates(statePayload.candidate_restaurants),
+        deliveryAddress: String(statePayload.delivery_address || "") || null,
+        deliveryPincode: String(statePayload.delivery_pincode || "") || null,
+        deliveryCharge: toNumber(statePayload.delivery_charge, 50),
+        foodTotal: toNumber(statePayload.food_total, 0),
+        proposedOrderNumber: statePayload.order_number === undefined ? null : Math.max(1, Math.floor(toNumber(statePayload.order_number, 1))),
+        posOrderRef: String(statePayload.pos_order_ref || "") || null,
       };
       const hydrated = updateSession(callSid, patch);
       if (hydrated) session = hydrated;
     }
   }
 
-  if (!session.restaurantId) {
-    const restaurantId = await resolveRestaurantId(to || session.toPhone);
-    session.restaurantId = restaurantId;
+  if (!session.toPhone) {
+    session.toPhone = to;
   }
 
   const speechResult = body.SpeechResult || "";
@@ -185,10 +225,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         status: "completed",
         total: turn.finalize.total,
         orderId: turn.finalize.orderId,
+        orderNumber: session.proposedOrderNumber || undefined,
+        deliveryCharge: session.deliveryCharge,
+        foodTotal: session.foodTotal,
+        posOrderRef: session.posOrderRef || undefined,
       });
       deleteSession(callSid);
     } else {
-      await persistCallLog(session, { status: session.status });
+      await persistCallLog(session, {
+        status: session.status,
+        orderNumber: session.proposedOrderNumber || undefined,
+        deliveryCharge: session.deliveryCharge,
+        foodTotal: session.foodTotal,
+        posOrderRef: session.posOrderRef || undefined,
+      });
       if (session.status === "transferred") {
         deleteSession(callSid);
       }
@@ -204,4 +254,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).send(buildTransferResponse(session));
   }
 }
-

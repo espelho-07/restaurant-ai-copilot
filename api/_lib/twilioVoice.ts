@@ -7,15 +7,84 @@ import {
   type OrderItem,
 } from "../../src/lib/types.js";
 import { processTranscript } from "../../src/lib/voiceEngine.js";
-import type { CallSession } from "./callSessionStore.js";
+import type { CallSession, RestaurantCandidate } from "./callSessionStore.js";
 import { hasBackendSupabaseEnv, supabase } from "./auth.js";
 
 const VoiceResponse = (Twilio as any).twiml?.VoiceResponse || (Twilio as any).default?.twiml?.VoiceResponse;
 const fallbackPhone = process.env.RESTAURANT_FALLBACK_PHONE || "";
+const DELIVERY_CHARGE = 50;
+
+function toNumber(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
 function normalizePhone(value: string): string {
   return String(value || "").replace(/[^\d+]/g, "");
 }
+
+function normalizeLocation(value: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parsePincode(value: string): string | null {
+  const match = String(value || "").match(/\b\d{6}\b/);
+  return match?.[0] || null;
+}
+
+function extractMissingColumn(errorMessage: string): string | null {
+  const schemaCacheMatch = errorMessage.match(/Could not find the '([^']+)' column/i);
+  if (schemaCacheMatch?.[1]) return schemaCacheMatch[1];
+
+  const doesNotExistMatch = errorMessage.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+  if (doesNotExistMatch?.[1]) return doesNotExistMatch[1];
+
+  return null;
+}
+
+function restaurantOptionsText(restaurants: RestaurantCandidate[]): string {
+  if (restaurants.length === 0) return "";
+  if (restaurants.length === 1) return restaurants[0].name;
+  if (restaurants.length === 2) return `${restaurants[0].name} or ${restaurants[1].name}`;
+  return `${restaurants[0].name}, ${restaurants[1].name}, or ${restaurants[2].name}`;
+}
+
+function chooseRestaurantCandidate(transcript: string, candidates: RestaurantCandidate[]): RestaurantCandidate | null {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
+  const text = normalizeLocation(transcript);
+  if (!text) return null;
+
+  if (/\b(top|best|first|number one|1st|pehla|sabse accha)\b/i.test(text)) {
+    return candidates[0];
+  }
+
+  let best: RestaurantCandidate | null = null;
+  let bestScore = 0;
+
+  for (const candidate of candidates) {
+    const name = normalizeLocation(candidate.name);
+    const area = normalizeLocation(candidate.area);
+    const city = normalizeLocation(candidate.city);
+
+    let score = 0;
+    if (name && (text.includes(name) || name.includes(text))) score += 0.9;
+    if (area && text.includes(area)) score += 0.5;
+    if (city && text.includes(city)) score += 0.2;
+
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return bestScore >= 0.5 ? best : null;
+}
+
 export function parseFormBody(req: VercelRequest): Record<string, string> {
   if (!req.body) return {};
 
@@ -90,44 +159,57 @@ function summarizeItems(items: OrderItem[]): string {
   return items.map((item) => `${item.qty} ${item.name}`).join(", ");
 }
 
-export async function resolveRestaurantId(phoneNumber: string): Promise<string | null> {
-  if (!hasBackendSupabaseEnv) return null;
+function calculateFoodTotal(session: CallSession): number {
+  return session.currentItems.reduce((sum, item) => sum + item.qty * item.price, 0);
+}
 
-  const explicitRestaurant = process.env.RESTAURANT_ID;
-  if (explicitRestaurant) return explicitRestaurant;
+export async function findRestaurantsByLocation(locationInput: string): Promise<RestaurantCandidate[]> {
+  if (!hasBackendSupabaseEnv) return [];
 
-  const normalizedInput = normalizePhone(phoneNumber);
+  const query = normalizeLocation(locationInput);
+  if (!query) return [];
 
-  try {
-    const { data: byPhone } = await supabase
-      .from("restaurants")
-      .select("id,phone")
-      .limit(200);
-
-    const matched = (byPhone || []).find((row: any) => {
-      const dbPhone = normalizePhone(String(row?.phone || ""));
-      if (!dbPhone || !normalizedInput) return false;
-      return dbPhone === normalizedInput || dbPhone.endsWith(normalizedInput) || normalizedInput.endsWith(dbPhone);
-    });
-
-    if (matched?.id) return String(matched.id);
-  } catch {
-    // fall through
-  }
+  type RestaurantRow = {
+    id: string;
+    name: string;
+    city?: string | null;
+    area?: string | null;
+    location?: string | null;
+    total_orders?: number | string | null;
+  };
 
   try {
-    const { data: firstRestaurant } = await supabase
+    const { data, error } = await supabase
       .from("restaurants")
-      .select("id")
-      .limit(1)
-      .maybeSingle();
+      .select("id,name,city,area,location,total_orders")
+      .limit(500);
 
-    if (firstRestaurant?.id) return String(firstRestaurant.id);
+    if (error) return [];
+
+    const matches = ((data || []) as RestaurantRow[])
+      .filter((row) => {
+        const city = normalizeLocation(String(row.city || row.location || ""));
+        const area = normalizeLocation(String(row.area || ""));
+        if (!city && !area) return false;
+        return city.includes(query) || area.includes(query) || query.includes(city) || query.includes(area);
+      })
+      .map((row) => ({
+        id: String(row.id),
+        name: String(row.name || "Restaurant"),
+        city: String(row.city || row.location || ""),
+        area: String(row.area || ""),
+        totalOrders: Math.max(0, Math.floor(toNumber(row.total_orders, 0))),
+      }))
+      .sort((a, b) => {
+        if (b.totalOrders !== a.totalOrders) return b.totalOrders - a.totalOrders;
+        return a.name.localeCompare(b.name);
+      })
+      .slice(0, 3);
+
+    return matches;
   } catch {
-    // no-op
+    return [];
   }
-
-  return null;
 }
 
 export async function fetchMenuAndOrders(restaurantId: string): Promise<{ menuItems: MenuItem[]; orders: Order[] }> {
@@ -216,33 +298,163 @@ export async function fetchMenuAndOrders(restaurantId: string): Promise<{ menuIt
   return { menuItems, orders };
 }
 
-async function insertCallOrder(restaurantId: string, session: CallSession): Promise<{ orderId: string; total: number }> {
+async function getNextOrderNumber(restaurantId: string): Promise<number> {
+  if (!hasBackendSupabaseEnv) return 1;
+
+  try {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("order_number,order_id")
+      .eq("restaurant_id", restaurantId)
+      .order("order_number", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!error) {
+      const latest = toNumber((data as any)?.order_number, 0);
+      if (latest > 0) return latest + 1;
+      const orderId = String((data as any)?.order_id || "");
+      const parsed = Number(orderId.replace(/[^\d]/g, ""));
+      if (Number.isFinite(parsed) && parsed > 0) return parsed + 1;
+    }
+  } catch {
+    // fallback below
+  }
+
+  try {
+    const { data } = await supabase
+      .from("orders")
+      .select("order_id")
+      .eq("restaurant_id", restaurantId)
+      .order("timestamp", { ascending: false })
+      .limit(200);
+
+    let maxOrder = 0;
+    for (const row of data || []) {
+      const raw = String((row as any)?.order_id || "");
+      const parsed = Number(raw.replace(/[^\d]/g, ""));
+      if (Number.isFinite(parsed) && parsed > maxOrder) maxOrder = parsed;
+    }
+
+    return maxOrder + 1;
+  } catch {
+    return 1;
+  }
+}
+
+function createPosOrderRef(restaurantId: string, orderNumber: number): string {
+  const prefix = String(restaurantId || "REST").replace(/[^a-zA-Z0-9]/g, "").slice(0, 6).toUpperCase() || "REST";
+  return `KOT-${prefix}-${orderNumber}`;
+}
+
+async function insertOrderRowsWithFallback(rows: Record<string, unknown>[]): Promise<void> {
+  let mutableRows = rows.map((row) => ({ ...row }));
+
+  while (true) {
+    const { error } = await supabase.from("orders").insert(mutableRows);
+    if (!error) return;
+
+    const missingColumn = extractMissingColumn(error.message || "");
+    if (missingColumn && Object.prototype.hasOwnProperty.call(mutableRows[0] || {}, missingColumn)) {
+      mutableRows = mutableRows.map((row) => {
+        const copy = { ...row };
+        delete (copy as any)[missingColumn];
+        return copy;
+      });
+      continue;
+    }
+
+    throw new Error(error.message || "Failed to insert order rows");
+  }
+}
+
+async function insertCallOrder(restaurantId: string, session: CallSession): Promise<{
+  orderId: string;
+  orderNumber: number;
+  total: number;
+  foodTotal: number;
+  deliveryCharge: number;
+  posOrderRef: string;
+}> {
   if (!hasBackendSupabaseEnv) {
     throw new Error("Server Supabase env is not configured");
   }
 
-  const orderId = `CALL-${Date.now()}`;
+  const orderNumber = session.proposedOrderNumber || await getNextOrderNumber(restaurantId);
+  const orderId = `#${orderNumber}`;
   const timestamp = new Date().toISOString();
+  const foodTotal = calculateFoodTotal(session);
+  const deliveryCharge = session.deliveryCharge || DELIVERY_CHARGE;
+  const total = foodTotal + deliveryCharge;
+  const posOrderRef = createPosOrderRef(restaurantId, orderNumber);
+
   const rows = session.currentItems.map((item) => ({
     restaurant_id: restaurantId,
     order_id: orderId,
+    order_number: orderNumber,
     item_name: item.name,
     quantity: item.qty,
     channel: "CALL",
     timestamp,
+    delivery_address: session.deliveryAddress,
+    city: session.selectedCity,
+    pincode: session.deliveryPincode,
+    food_total: foodTotal,
+    delivery_charge: deliveryCharge,
+    total_amount: total,
+    pos_order_ref: posOrderRef,
   }));
 
   if (rows.length > 0) {
-    const { error } = await supabase.from("orders").insert(rows);
-    if (error) throw new Error(error.message);
+    await insertOrderRowsWithFallback(rows as Record<string, unknown>[]);
   }
 
-  const total = session.currentItems.reduce((sum, item) => sum + item.price * item.qty, 0);
-  return { orderId, total };
+  try {
+    const { data: restaurant } = await supabase
+      .from("restaurants")
+      .select("total_orders")
+      .eq("id", restaurantId)
+      .limit(1)
+      .maybeSingle();
+
+    const nextTotalOrders = Math.max(0, Math.floor(toNumber((restaurant as any)?.total_orders, 0))) + 1;
+
+    await supabase
+      .from("restaurants")
+      .update({ total_orders: nextTotalOrders })
+      .eq("id", restaurantId);
+  } catch {
+    // best effort
+  }
+
+  return { orderId, orderNumber, total, foodTotal, deliveryCharge, posOrderRef };
 }
 
-export async function persistCallLog(session: CallSession, extras?: { status?: string; total?: number; orderId?: string; transferred?: boolean }): Promise<void> {
+export async function persistCallLog(session: CallSession, extras?: {
+  status?: string;
+  total?: number;
+  foodTotal?: number;
+  deliveryCharge?: number;
+  orderId?: string;
+  orderNumber?: number;
+  posOrderRef?: string;
+  transferred?: boolean;
+}): Promise<void> {
   if (!hasBackendSupabaseEnv) return;
+
+  const callStatePayload = {
+    items: session.currentItems,
+    selected_city: session.selectedCity,
+    selected_area: session.selectedArea,
+    restaurant_name: session.selectedRestaurantName,
+    candidate_restaurants: session.candidateRestaurants,
+    delivery_address: session.deliveryAddress,
+    delivery_pincode: session.deliveryPincode,
+    delivery_charge: extras?.deliveryCharge ?? session.deliveryCharge,
+    food_total: extras?.foodTotal ?? calculateFoodTotal(session),
+    order_number: extras?.orderNumber ?? session.proposedOrderNumber,
+    pos_order_ref: extras?.posOrderRef ?? session.posOrderRef,
+  };
 
   try {
     await supabase.from("call_logs").upsert({
@@ -253,9 +465,10 @@ export async function persistCallLog(session: CallSession, extras?: { status?: s
       language: session.language,
       status: extras?.status || session.status,
       transcript: session.transcript,
-      order_json: session.currentItems,
+      detected_items: callStatePayload,
+      order_json: callStatePayload,
       order_id: extras?.orderId || session.orderId,
-      total: extras?.total ?? session.currentItems.reduce((sum, item) => sum + item.price * item.qty, 0),
+      total: extras?.total ?? calculateFoodTotal(session) + (session.deliveryCharge || DELIVERY_CHARGE),
       is_transferred: extras?.transferred || session.status === "transferred",
       started_at: session.startedAt,
       updated_at: new Date().toISOString(),
@@ -283,11 +496,31 @@ export function buildTransferResponse(session: CallSession): string {
 
 export function buildInitialVoiceResponse(session: CallSession, baseUrl: string): string {
   const response = new VoiceResponse();
-  const greeting = "Hello, welcome to the AI restaurant ordering system. Please tell me your order.";
+  const greeting = "Hello! Welcome to the AI restaurant ordering assistant. Which city or area are you calling from?";
   addMessage(session, "ai", greeting);
+  session.status = "awaiting_location";
   gatherPrompt(response, greeting, baseUrl, session.language);
   response.redirect({ method: "POST" }, `${baseUrl}/api/process-order`);
   return response.toString();
+}
+
+function buildRetryPrompt(session: CallSession): string {
+  if (session.status === "awaiting_location") {
+    return "I did not catch your city or area. Please tell me your city again.";
+  }
+  if (session.status === "awaiting_restaurant_selection") {
+    const options = restaurantOptionsText(session.candidateRestaurants);
+    return options
+      ? `Please select one restaurant: ${options}.`
+      : "Please tell me which restaurant you would like to order from.";
+  }
+  if (session.status === "awaiting_address") {
+    return "Please tell your full delivery address including area and six digit pincode.";
+  }
+  if (session.status === "awaiting_confirmation") {
+    return "Please say yes to place the order, or no to modify your order.";
+  }
+  return "I did not catch that. Please repeat your order.";
 }
 
 export async function processSpeechTurn(params: {
@@ -306,7 +539,7 @@ export async function processSpeechTurn(params: {
       return { twiml: buildTransferResponse(session) };
     }
 
-    const retryText = "I did not catch that. Please repeat your order.";
+    const retryText = buildRetryPrompt(session);
     addMessage(session, "ai", retryText);
     gatherPrompt(response, retryText, baseUrl, session.language);
     return { twiml: response.toString() };
@@ -315,32 +548,181 @@ export async function processSpeechTurn(params: {
   session.language = chooseLanguageFromSpeech(transcript);
   addMessage(session, "user", transcript);
 
+  if (session.comboPrompted && session.pendingComboItemIds.length > 0) {
+    if (isAffirmative(transcript)) {
+      const { menuItems } = await fetchMenuAndOrders(session.restaurantId || "");
+      for (const comboItemId of session.pendingComboItemIds) {
+        const comboItem = menuItems.find((m) => m.id === comboItemId);
+        if (!comboItem) continue;
+        const existing = session.currentItems.find((item) => item.menuItemId === comboItem.id);
+        if (existing) existing.qty += 1;
+        else {
+          session.currentItems.push({
+            menuItemId: comboItem.id,
+            name: comboItem.name,
+            qty: 1,
+            price: comboItem.price,
+            cost: comboItem.cost,
+            modifiers: [],
+            confidence: 1,
+          });
+        }
+      }
+
+      session.pendingComboItemIds = [];
+      const comboAdded = "Great, I added the combo items. Anything else?";
+      addMessage(session, "ai", comboAdded);
+      gatherPrompt(response, comboAdded, baseUrl, session.language);
+      return { twiml: response.toString() };
+    }
+
+    if (isNegative(transcript)) {
+      session.pendingComboItemIds = [];
+    }
+  }
+
   if (session.upsellItemId && isNegative(transcript)) {
     session.upsellItemId = null;
+  }
+
+  if (session.status === "awaiting_location") {
+    const options = await findRestaurantsByLocation(transcript);
+
+    if (options.length === 0) {
+      session.failureCount += 1;
+      if (session.failureCount >= 3) {
+        session.status = "transferred";
+        return { twiml: buildTransferResponse(session) };
+      }
+
+      const noMatch = "I could not find restaurants in that area. Please tell your city or nearby area again.";
+      addMessage(session, "ai", noMatch);
+      gatherPrompt(response, noMatch, baseUrl, session.language);
+      return { twiml: response.toString() };
+    }
+
+    session.failureCount = 0;
+    session.selectedCity = options[0].city || transcript;
+    session.candidateRestaurants = options;
+    session.status = "awaiting_restaurant_selection";
+
+    const top = options[0];
+    const alternatives = options.slice(1).map((item) => item.name).join(" or ");
+    const cityLabel = top.city || session.selectedCity || "your area";
+    const recommendation = alternatives
+      ? `I found restaurants in ${cityLabel}. I recommend ${top.name}. You can also order from ${alternatives}. Which restaurant would you like?`
+      : `I found ${top.name} in ${cityLabel}. Would you like to order from ${top.name}?`;
+
+    addMessage(session, "ai", recommendation);
+    gatherPrompt(response, recommendation, baseUrl, session.language);
+    return { twiml: response.toString() };
+  }
+
+  if (session.status === "awaiting_restaurant_selection") {
+    const selected = chooseRestaurantCandidate(transcript, session.candidateRestaurants);
+    if (!selected) {
+      session.failureCount += 1;
+      if (session.failureCount >= 3) {
+        session.status = "transferred";
+        return { twiml: buildTransferResponse(session) };
+      }
+
+      const options = restaurantOptionsText(session.candidateRestaurants);
+      const prompt = options
+        ? `Please choose one restaurant from: ${options}.`
+        : "Please tell the restaurant name you want to order from.";
+      addMessage(session, "ai", prompt);
+      gatherPrompt(response, prompt, baseUrl, session.language);
+      return { twiml: response.toString() };
+    }
+
+    session.failureCount = 0;
+    session.restaurantId = selected.id;
+    session.selectedRestaurantName = selected.name;
+    session.selectedCity = selected.city;
+    session.selectedArea = selected.area;
+    session.status = "collecting_order";
+    session.upsellPrompted = false;
+    session.comboPrompted = false;
+    session.pendingComboItemIds = [];
+
+    const choosePrompt = `Great! What would you like to order from ${selected.name}?`;
+    addMessage(session, "ai", choosePrompt);
+    gatherPrompt(response, choosePrompt, baseUrl, session.language);
+    return { twiml: response.toString() };
+  }
+
+  if (session.status === "awaiting_address") {
+    if (transcript.length < 8) {
+      const askAgain = "Please share a complete delivery address with area and six digit pincode.";
+      addMessage(session, "ai", askAgain);
+      gatherPrompt(response, askAgain, baseUrl, session.language);
+      return { twiml: response.toString() };
+    }
+
+    session.deliveryAddress = transcript;
+    session.deliveryPincode = parsePincode(transcript);
+    session.foodTotal = calculateFoodTotal(session);
+    session.deliveryCharge = DELIVERY_CHARGE;
+
+    if (!session.proposedOrderNumber && session.restaurantId) {
+      session.proposedOrderNumber = await getNextOrderNumber(session.restaurantId);
+    }
+
+    const orderNumber = session.proposedOrderNumber || 1;
+    const total = session.foodTotal + session.deliveryCharge;
+    session.status = "awaiting_confirmation";
+
+    const summary = summarizeItems(session.currentItems.map((item) => ({
+      menuItemId: item.menuItemId,
+      name: item.name,
+      qty: item.qty,
+      price: item.price,
+      cost: item.cost,
+    })));
+
+    const confirmPrompt = `You ordered ${summary}. Delivery charge is rupees ${session.deliveryCharge}. Total bill is rupees ${total}. Your order number is #${orderNumber}. Should I place the order?`;
+    addMessage(session, "ai", confirmPrompt);
+    gatherPrompt(response, confirmPrompt, baseUrl, session.language);
+    return { twiml: response.toString() };
   }
 
   if (session.status === "awaiting_confirmation") {
     if (isAffirmative(transcript)) {
       if (!session.restaurantId) {
-        const unavailable = "We are unable to place this order right now. Transferring you to staff.";
+        const unavailable = "I could not resolve restaurant details. Transferring you to staff.";
         addMessage(session, "ai", unavailable);
         session.status = "transferred";
         return { twiml: buildTransferResponse(session) };
       }
 
+      if (!session.deliveryAddress) {
+        session.status = "awaiting_address";
+        const addressPrompt = "Please tell me your delivery address before I place the order.";
+        addMessage(session, "ai", addressPrompt);
+        gatherPrompt(response, addressPrompt, baseUrl, session.language);
+        return { twiml: response.toString() };
+      }
+
       const finalized = await insertCallOrder(session.restaurantId, session);
       session.orderId = finalized.orderId;
+      session.proposedOrderNumber = finalized.orderNumber;
+      session.foodTotal = finalized.foodTotal;
+      session.deliveryCharge = finalized.deliveryCharge;
+      session.posOrderRef = finalized.posOrderRef;
       session.status = "completed";
 
-      const confirmText = `Your order has been placed. Order ID ${finalized.orderId}. Thank you for calling.`;
+      const confirmText = `Your order ${finalized.orderId} has been placed. Total is rupees ${finalized.total}. Kitchen ticket ${finalized.posOrderRef} created. Thank you for calling.`;
       addMessage(session, "ai", confirmText);
       response.say({ language: session.language }, confirmText);
       response.hangup();
-      return { twiml: response.toString(), finalize: finalized };
+      return { twiml: response.toString(), finalize: { orderId: finalized.orderId, total: finalized.total } };
     }
 
     if (isNegative(transcript)) {
       session.status = "collecting_order";
+      session.upsellItemId = null;
+      session.pendingComboItemIds = [];
       const editPrompt = "Sure, please tell me the changes to your order.";
       addMessage(session, "ai", editPrompt);
       gatherPrompt(response, editPrompt, baseUrl, session.language);
@@ -349,10 +731,11 @@ export async function processSpeechTurn(params: {
   }
 
   if (!session.restaurantId) {
-    const unavailable = "Order system is temporarily unavailable. Let me transfer your call to our staff.";
-    addMessage(session, "ai", unavailable);
-    session.status = "transferred";
-    return { twiml: buildTransferResponse(session) };
+    const relaunch = "Before ordering, please tell your city so I can find available restaurants.";
+    session.status = "awaiting_location";
+    addMessage(session, "ai", relaunch);
+    gatherPrompt(response, relaunch, baseUrl, session.language);
+    return { twiml: response.toString() };
   }
 
   const { menuItems, orders } = await fetchMenuAndOrders(session.restaurantId);
@@ -390,7 +773,7 @@ export async function processSpeechTurn(params: {
 
   if (result.unmatched.length > 0) {
     session.failureCount += 1;
-    const msg = `Sorry, that item is not available on our menu.`;
+    const msg = "Sorry, that item is not available on our menu.";
     addMessage(session, "ai", msg);
 
     if (session.failureCount >= 3) {
@@ -404,6 +787,16 @@ export async function processSpeechTurn(params: {
 
   session.failureCount = 0;
 
+  if (result.combos.length > 0 && !session.comboPrompted) {
+    const combo = result.combos[0];
+    session.comboPrompted = true;
+    session.pendingComboItemIds = combo.items.map((item) => item.id);
+    const comboPrompt = `We have a combo with ${combo.items.map((item) => item.name).join(", ")} for rupees ${Math.round(combo.comboPrice)}. Would you like that combo?`;
+    addMessage(session, "ai", comboPrompt);
+    gatherPrompt(response, comboPrompt, baseUrl, session.language);
+    return { twiml: response.toString() };
+  }
+
   if (result.upsells.length > 0 && !session.upsellPrompted) {
     const upsell = result.upsells[0];
     session.upsellPrompted = true;
@@ -415,18 +808,10 @@ export async function processSpeechTurn(params: {
   }
 
   if (result.intent === "confirm_order" && session.currentItems.length > 0) {
-    session.status = "awaiting_confirmation";
-    const summary = summarizeItems(session.currentItems.map((item) => ({
-      menuItemId: item.menuItemId,
-      name: item.name,
-      qty: item.qty,
-      price: item.price,
-      cost: item.cost,
-    })));
-    const total = session.currentItems.reduce((sum, item) => sum + item.qty * item.price, 0);
-    const confirmPrompt = `You ordered ${summary}. Total is rupees ${total}. Should I place the order?`;
-    addMessage(session, "ai", confirmPrompt);
-    gatherPrompt(response, confirmPrompt, baseUrl, session.language);
+    session.status = "awaiting_address";
+    const addressPrompt = "Please tell your delivery address including area and pincode.";
+    addMessage(session, "ai", addressPrompt);
+    gatherPrompt(response, addressPrompt, baseUrl, session.language);
     return { twiml: response.toString() };
   }
 
@@ -435,7 +820,4 @@ export async function processSpeechTurn(params: {
   gatherPrompt(response, aiPrompt || "Please continue with your order.", baseUrl, session.language);
   return { twiml: response.toString() };
 }
-
-
-
 

@@ -1,12 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { cleanupExpiredSessions, createOrGetSession, updateSession } from "./_lib/callSessionStore.js";
+import { cleanupExpiredSessions, createOrGetSession } from "./_lib/callSessionStore.js";
 import { hasBackendSupabaseEnv } from "./_lib/auth.js";
 import {
   buildInitialVoiceResponse,
   getBaseUrl,
   parseFormBody,
   persistCallLog,
-  resolveRestaurantId,
 } from "./_lib/twilioVoice.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -29,11 +28,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const to = body.To || "";
 
   const session = createOrGetSession(callSid, from, to);
-  const restaurantId = await resolveRestaurantId(to);
-  updateSession(callSid, { restaurantId });
 
   const twiml = buildInitialVoiceResponse(session, getBaseUrl(req));
-  await persistCallLog(session, { status: "collecting_order" });
+  await persistCallLog(session, { status: "awaiting_location" });
 
   res.setHeader("Content-Type", "text/xml");
   return res.status(200).send(twiml);

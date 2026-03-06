@@ -60,6 +60,9 @@ async function createRestaurantRow(userId: string): Promise<string> {
     name: "",
     location: "",
     cuisine: "",
+    city: "",
+    area: "",
+    total_orders: 0,
     uses_pos: false,
     setup_complete: false,
   };
@@ -164,3 +167,4 @@ export function parseNumber(value: unknown, fallback = 0): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
+

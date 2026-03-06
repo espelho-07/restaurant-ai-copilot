@@ -1,6 +1,3 @@
-// Telephony Service
-// Utility helpers for call-agent dashboard widgets.
-
 import { supabase } from "./supabase";
 
 export function formatDuration(seconds: number): string {
@@ -13,9 +10,17 @@ export interface RecentCall {
     callSid: string;
     status: string;
     orderId: string | null;
+    orderNumber?: number | null;
     total: number;
+    foodTotal?: number;
+    deliveryCharge?: number;
     timestamp: string;
     transcript: { role: string; text: string }[];
+    restaurantName?: string;
+    selectedCity?: string;
+    deliveryAddress?: string;
+    pincode?: string;
+    posOrderRef?: string;
 }
 
 export async function fetchRecentCalls(): Promise<RecentCall[]> {

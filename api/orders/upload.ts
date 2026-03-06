@@ -16,14 +16,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!Array.isArray(orders)) return res.status(400).json({ error: "Expected array of orders" });
 
     const formatted = orders
-      .map((order: any) => ({
-        restaurant_id: restaurantId,
-        order_id: String(order?.order_id || order?.id || `ORD-${Date.now()}`).trim(),
-        item_name: String(order?.name || order?.item_name || "").trim(),
-        quantity: Math.max(1, parseNumber(order?.qty ?? order?.quantity, 1)),
-        channel: String(order?.channel || "OFFLINE").toUpperCase(),
-        timestamp: String(order?.timestamp || new Date().toISOString()),
-      }))
+      .map((order: any) => {
+        const qty = Math.max(1, parseNumber(order?.qty ?? order?.quantity, 1));
+        const price = parseNumber(order?.price, 0);
+        const foodTotal = parseNumber(order?.food_total, qty * price);
+        const deliveryCharge = parseNumber(order?.delivery_charge, 0);
+        const totalAmount = parseNumber(order?.total_amount, foodTotal + deliveryCharge);
+
+        return {
+          restaurant_id: restaurantId,
+          order_id: String(order?.order_id || order?.id || `#${Date.now()}`).trim(),
+          order_number: parseNumber(order?.order_number, 0) || null,
+          item_name: String(order?.name || order?.item_name || "").trim(),
+          quantity: qty,
+          channel: String(order?.channel || "OFFLINE").toUpperCase(),
+          timestamp: String(order?.timestamp || new Date().toISOString()),
+          delivery_address: order?.delivery_address ? String(order.delivery_address) : null,
+          city: order?.city ? String(order.city) : null,
+          pincode: order?.pincode ? String(order.pincode) : null,
+          food_total: foodTotal,
+          delivery_charge: deliveryCharge,
+          total_amount: totalAmount,
+          pos_order_ref: order?.pos_order_ref ? String(order.pos_order_ref) : null,
+        };
+      })
       .filter((row: any) => row.order_id.length > 0 && row.item_name.length > 0);
 
     if (formatted.length === 0) return res.status(400).json({ error: "No valid orders provided" });

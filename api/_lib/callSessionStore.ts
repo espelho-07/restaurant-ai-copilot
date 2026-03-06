@@ -1,6 +1,21 @@
 import type { ConversationMessage, VoiceOrderItem } from "../../src/lib/types.js";
 
-export type CallFlowStatus = "collecting_order" | "awaiting_confirmation" | "completed" | "transferred";
+export type CallFlowStatus =
+  | "awaiting_location"
+  | "awaiting_restaurant_selection"
+  | "collecting_order"
+  | "awaiting_address"
+  | "awaiting_confirmation"
+  | "completed"
+  | "transferred";
+
+export interface RestaurantCandidate {
+  id: string;
+  name: string;
+  city: string;
+  area: string;
+  totalOrders: number;
+}
 
 export interface CallSession {
   callSid: string;
@@ -15,8 +30,20 @@ export interface CallSession {
   failureCount: number;
   upsellItemId: number | null;
   upsellPrompted: boolean;
+  comboPrompted: boolean;
+  pendingComboItemIds: number[];
   orderId: string | null;
   restaurantId: string | null;
+  selectedRestaurantName: string | null;
+  selectedCity: string | null;
+  selectedArea: string | null;
+  candidateRestaurants: RestaurantCandidate[];
+  deliveryAddress: string | null;
+  deliveryPincode: string | null;
+  foodTotal: number;
+  deliveryCharge: number;
+  proposedOrderNumber: number | null;
+  posOrderRef: string | null;
 }
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
@@ -40,14 +67,26 @@ export function createOrGetSession(callSid: string, callerPhone: string, toPhone
     startedAt: nowIso(),
     updatedAt: nowIso(),
     language: "en-IN",
-    status: "collecting_order",
+    status: "awaiting_location",
     currentItems: [],
     transcript: [],
     failureCount: 0,
     upsellItemId: null,
     upsellPrompted: false,
+    comboPrompted: false,
+    pendingComboItemIds: [],
     orderId: null,
     restaurantId: null,
+    selectedRestaurantName: null,
+    selectedCity: null,
+    selectedArea: null,
+    candidateRestaurants: [],
+    deliveryAddress: null,
+    deliveryPincode: null,
+    foodTotal: 0,
+    deliveryCharge: 50,
+    proposedOrderNumber: null,
+    posOrderRef: null,
   };
 
   sessions.set(callSid, session);
@@ -81,4 +120,3 @@ export function cleanupExpiredSessions(): void {
     }
   }
 }
-

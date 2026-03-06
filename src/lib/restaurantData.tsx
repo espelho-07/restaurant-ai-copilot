@@ -9,6 +9,9 @@ export interface RestaurantProfile {
     name: string;
     location: string;
     cuisine: string;
+    city: string;
+    area: string;
+    totalOrders: number;
     usesPOS: boolean;
     setupComplete: boolean;
     posConfig?: POSConfig;
@@ -18,6 +21,9 @@ const defaultProfile: RestaurantProfile = {
     name: "",
     location: "",
     cuisine: "",
+    city: "",
+    area: "",
+    totalOrders: 0,
     usesPOS: false,
     setupComplete: false,
     posConfig: defaultPOSConfig,
@@ -121,12 +127,19 @@ function mapOrder(order: any): Order {
 
     return {
         id: String(order?.id || order?.orderId || order?.order_id || `ORD-${Date.now()}`),
+        orderNumber: toNumber(order?.orderNumber ?? order?.order_number, 0) || null,
         items,
         total,
         totalCost,
         margin: toNumber(order?.margin, margin),
         timestamp: new Date(order?.timestamp || order?.created_at || new Date().toISOString()),
         channel: normalizeChannel(order?.channel),
+        deliveryAddress: String(order?.deliveryAddress ?? order?.delivery_address ?? ""),
+        city: String(order?.city ?? ""),
+        pincode: String(order?.pincode ?? ""),
+        foodTotal: toNumber(order?.foodTotal ?? order?.food_total, total),
+        deliveryCharge: toNumber(order?.deliveryCharge ?? order?.delivery_charge, 0),
+        posOrderRef: String(order?.posOrderRef ?? order?.pos_order_ref ?? ""),
     };
 }
 
@@ -148,6 +161,9 @@ function mapProfile(row: any): RestaurantProfile {
         name: String(row?.name || ""),
         location: String(row?.location || ""),
         cuisine: String(row?.cuisine || ""),
+        city: String(row?.city || row?.location || ""),
+        area: String(row?.area || ""),
+        totalOrders: toNumber(row?.totalOrders ?? row?.total_orders, 0),
         usesPOS: Boolean(row?.usesPOS ?? row?.uses_pos),
         setupComplete: Boolean(row?.setupComplete ?? row?.setup_complete),
         posConfig,
