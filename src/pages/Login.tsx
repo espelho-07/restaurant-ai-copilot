@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { hasSupabaseEnv, supabase } from "@/lib/supabase";
 import {
     BarChart3,
     CheckCircle2,
@@ -34,6 +34,11 @@ export default function Login() {
         if (password.length < 6) {
             toast.error("Password must be at least 6 characters");
             setLoading(false);
+            return;
+        }
+
+        if (!hasSupabaseEnv) {
+            toast.error("Supabase is not configured. Add env vars on Vercel and redeploy.");
             return;
         }
 
@@ -258,3 +263,4 @@ export default function Login() {
         </div>
     );
 }
+

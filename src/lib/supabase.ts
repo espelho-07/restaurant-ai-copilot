@@ -9,8 +9,13 @@ const legacySupabaseAnon = typeof process !== "undefined" ? process.env.NEXT_PUB
 const supabaseUrl = (viteSupabaseUrl || legacySupabaseUrl || "").trim();
 const supabaseKey = (viteSupabaseAnon || legacySupabaseAnon || "").trim();
 
-if (!supabaseUrl || !supabaseKey) {
-    console.warn("Missing Supabase credentials. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.");
+export const hasSupabaseEnv = Boolean(supabaseUrl && supabaseKey);
+
+if (!hasSupabaseEnv) {
+    console.error("Missing Supabase credentials. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Vercel env vars.");
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+const safeUrl = hasSupabaseEnv ? supabaseUrl : "https://example.supabase.co";
+const safeKey = hasSupabaseEnv ? supabaseKey : "missing-supabase-anon-key";
+
+export const supabase = createClient(safeUrl, safeKey);

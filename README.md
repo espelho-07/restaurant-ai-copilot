@@ -41,7 +41,6 @@ For full local API + frontend behavior, run via Vercel dev in environments where
 
 ## Core API Endpoints
 
-- `GET /api/auth/session`
 - `GET|POST|PUT|DELETE /api/menu`
 - `POST /api/menu/upload`
 - `GET|POST /api/orders`
@@ -49,12 +48,6 @@ For full local API + frontend behavior, run via Vercel dev in environments where
 - `POST /api/orders/upload`
 - `GET|POST|DELETE /api/channels`
 - `GET|PUT /api/restaurants/profile`
-- `GET|POST /api/restaurants/setup`
-- `GET|POST /api/pos/sync`
-- `GET /api/analytics/intelligence`
-- `GET /api/insights`
-- `GET /api/combo-engine`
-- `GET /api/price-optimization`
 - `POST /api/voice`
 - `POST /api/process-order`
 - `GET /api/calls/recent`
@@ -101,3 +94,4 @@ create table if not exists call_logs (
 create index if not exists idx_call_logs_restaurant_started_at
   on call_logs (restaurant_id, started_at desc);
 ```
+
