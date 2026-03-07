@@ -66,19 +66,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (ownerEmail && userEmail !== ownerEmail) {
       return res.status(200).json({ calls: [] });
     }
-
-    if (fixedRestaurantId && restaurantId !== fixedRestaurantId) {
-      return res.status(200).json({ calls: [] });
-    }
   } catch {
     return res.status(200).json({ calls: [] });
   }
+
+  // In single-restaurant demo mode always query the configured restaurant.
+  // This avoids empty call dashboard when auth context points to an older row.
+  const targetRestaurantId = fixedRestaurantId || restaurantId;
 
   try {
     const { data: callRows } = await supabase
       .from("call_logs")
       .select("call_sid,status,order_id,total,started_at,updated_at,transcript,detected_items")
-      .eq("restaurant_id", restaurantId)
+      .eq("restaurant_id", targetRestaurantId)
       .order("started_at", { ascending: false })
       .limit(20);
 
@@ -109,7 +109,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { data: orderRows } = await supabase
     .from("orders")
     .select("order_id,item_name,quantity,timestamp,channel,total_amount,delivery_charge,food_total,city,pincode,delivery_address,order_number")
-    .eq("restaurant_id", restaurantId)
+    .eq("restaurant_id", targetRestaurantId)
     .eq("channel", "CALL")
     .order("timestamp", { ascending: false })
     .limit(200);
