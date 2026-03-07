@@ -54,41 +54,9 @@ function hasMissingTable(errorMessage: string): boolean {
   return /relation\s+"?[a-zA-Z0-9_]+"?\s+does not exist/i.test(errorMessage);
 }
 
-async function createRestaurantRow(userId: string): Promise<string> {
-  const payload: Record<string, unknown> = {
-    user_id: userId,
-    name: "",
-    location: "",
-    cuisine: "",
-    city: "",
-    area: "",
-    total_orders: 0,
-    uses_pos: false,
-    setup_complete: false,
-  };
-
-  while (true) {
-    const { data, error } = await supabase
-      .from("restaurants")
-      .insert(payload)
-      .select("id")
-      .single();
-
-    if (!error && data?.id) return String(data.id);
-
-    const message = error?.message || "";
-    const missingColumn = extractMissingColumn(message);
-    if (missingColumn && Object.prototype.hasOwnProperty.call(payload, missingColumn)) {
-      delete payload[missingColumn];
-      continue;
-    }
-
-    if (hasMissingTable(message)) {
-      throw new Error("Database schema mismatch: restaurants table is missing. Run supabase_schema.sql.");
-    }
-
-    throw new Error(message || "Restaurant profile not found");
-  }
+function isUniqueViolation(errorMessage: string): boolean {
+  const message = String(errorMessage || "").toLowerCase();
+  return message.includes("duplicate key value violates unique constraint") || message.includes("23505");
 }
 
 function pickPreferredRestaurant(rows: RestaurantIdentityRow[]): string | null {
@@ -122,6 +90,65 @@ function pickPreferredRestaurant(rows: RestaurantIdentityRow[]): string | null {
   return scored[0]?.id || null;
 }
 
+async function findExistingRestaurantId(userId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("restaurants")
+    .select("id,setup_complete,updated_at,created_at,name")
+    .eq("user_id", userId)
+    .limit(100);
+
+  if (error) {
+    if (hasMissingTable(error.message || "")) {
+      throw new Error("Database schema mismatch: restaurants table is missing. Run supabase_schema.sql.");
+    }
+    return null;
+  }
+
+  return pickPreferredRestaurant((data || []) as RestaurantIdentityRow[]);
+}
+
+async function createRestaurantRow(userId: string): Promise<string> {
+  const payload: Record<string, unknown> = {
+    user_id: userId,
+    name: "",
+    location: "",
+    cuisine: "",
+    city: "",
+    area: "",
+    total_orders: 0,
+    uses_pos: false,
+    setup_complete: false,
+  };
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("restaurants")
+      .insert(payload)
+      .select("id")
+      .single();
+
+    if (!error && data?.id) return String(data.id);
+
+    const message = error?.message || "";
+    const missingColumn = extractMissingColumn(message);
+    if (missingColumn && Object.prototype.hasOwnProperty.call(payload, missingColumn)) {
+      delete payload[missingColumn];
+      continue;
+    }
+
+    if (isUniqueViolation(message)) {
+      const existingId = await findExistingRestaurantId(userId);
+      if (existingId) return existingId;
+    }
+
+    if (hasMissingTable(message)) {
+      throw new Error("Database schema mismatch: restaurants table is missing. Run supabase_schema.sql.");
+    }
+
+    throw new Error(message || "Restaurant profile not found");
+  }
+}
+
 export async function getAuthContext(req: VercelRequest): Promise<AuthContext> {
   if (!hasBackendSupabaseEnv) {
     throw new Error("Server Supabase env is not configured");
@@ -141,20 +168,7 @@ export async function getAuthContext(req: VercelRequest): Promise<AuthContext> {
     throw new Error("Invalid token");
   }
 
-  const { data: existingRestaurants, error: restaurantFetchError } = await supabase
-    .from("restaurants")
-    .select("id,setup_complete,updated_at,created_at,name")
-    .eq("user_id", user.id)
-    .limit(100);
-
-  if (restaurantFetchError) {
-    if (hasMissingTable(restaurantFetchError.message || "")) {
-      throw new Error("Database schema mismatch: restaurants table is missing. Run supabase_schema.sql.");
-    }
-    throw new Error(restaurantFetchError.message || "Failed to load restaurant profile");
-  }
-
-  const preferredRestaurantId = pickPreferredRestaurant((existingRestaurants || []) as RestaurantIdentityRow[]);
+  const preferredRestaurantId = await findExistingRestaurantId(user.id);
   if (preferredRestaurantId) {
     return { userId: user.id, restaurantId: preferredRestaurantId };
   }
@@ -167,4 +181,3 @@ export function parseNumber(value: unknown, fallback = 0): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
-

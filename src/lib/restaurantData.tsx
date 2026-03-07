@@ -74,8 +74,8 @@ interface RestaurantDataContextType {
     removeMenuItem: (id: number) => Promise<void>;
     updateMenuItem: (id: number, updates: Partial<Omit<MenuItem, "id">>) => Promise<void>;
     addOrder: (items: OrderItem[], channel?: SalesChannel) => Promise<Order | null>;
-    importMenuItems: (items: Omit<MenuItem, "id">[]) => Promise<{ added: number; duplicates: number }>;
-    importOrders: (newOrders: Order[]) => Promise<number>;
+    importMenuItems: (items: Omit<MenuItem, "id">[], onProgress?: (percent: number) => void) => Promise<{ added: number; duplicates: number }>;
+    importOrders: (newOrders: Order[], onProgress?: (percent: number) => void) => Promise<number>;
     updateProfile: (updates: Partial<RestaurantProfile>) => Promise<void>;
     updatePOSConfig: (config: POSConfig) => Promise<void>;
     updateCommission: (channel: SalesChannel, updates: Partial<ChannelCommission>) => Promise<void>;
@@ -335,23 +335,46 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
         return mappedOrders.find((order) => order.id === created.orderId) || null;
     };
 
-    const importMenuItems = async (items: Omit<MenuItem, "id">[]) => {
+    const importMenuItems = async (
+        items: Omit<MenuItem, "id">[],
+        onProgress?: (percent: number) => void,
+    ) => {
         if (!Array.isArray(items) || items.length === 0) {
+            onProgress?.(100);
             return { added: 0, duplicates: 0 };
         }
 
-        const inserted = await requestJson<any[]>("/api/menu", {
-            method: "POST",
-            body: JSON.stringify(items),
-        });
+        const chunkSize = 120;
+        let added = 0;
+
+        onProgress?.(5);
+
+        for (let index = 0; index < items.length; index += chunkSize) {
+            const chunk = items.slice(index, index + chunkSize);
+            const inserted = await requestJson<any[]>("/api/menu", {
+                method: "POST",
+                body: JSON.stringify(chunk),
+            });
+
+            added += Array.isArray(inserted) ? inserted.length : chunk.length;
+            const processed = Math.min(items.length, index + chunk.length);
+            const percent = Math.min(95, Math.round((processed / items.length) * 100));
+            onProgress?.(percent);
+        }
 
         await refreshMenu();
-        const added = Array.isArray(inserted) ? inserted.length : items.length;
+        onProgress?.(100);
+
         return { added, duplicates: Math.max(0, items.length - added) };
     };
-
-    const importOrders = async (newOrders: Order[]) => {
-        if (!Array.isArray(newOrders) || newOrders.length === 0) return 0;
+    const importOrders = async (
+        newOrders: Order[],
+        onProgress?: (percent: number) => void,
+    ) => {
+        if (!Array.isArray(newOrders) || newOrders.length === 0) {
+            onProgress?.(100);
+            return 0;
+        }
 
         const rows = newOrders.flatMap((order) =>
             order.items.map((item) => ({
@@ -363,15 +386,32 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
             })),
         );
 
-        const result = await requestJson<{ count?: number }>("/api/orders/upload", {
-            method: "POST",
-            body: JSON.stringify(rows),
-        });
+        if (rows.length === 0) {
+            onProgress?.(100);
+            return 0;
+        }
+
+        const chunkSize = 250;
+        let insertedCount = 0;
+        onProgress?.(5);
+
+        for (let index = 0; index < rows.length; index += chunkSize) {
+            const chunk = rows.slice(index, index + chunkSize);
+            const result = await requestJson<{ count?: number }>("/api/orders/upload", {
+                method: "POST",
+                body: JSON.stringify(chunk),
+            });
+
+            insertedCount += toNumber(result?.count, chunk.length);
+            const processed = Math.min(rows.length, index + chunk.length);
+            const percent = Math.min(95, Math.round((processed / rows.length) * 100));
+            onProgress?.(percent);
+        }
 
         await refreshOrders();
-        return toNumber(result?.count, rows.length);
+        onProgress?.(100);
+        return insertedCount;
     };
-
     const updateProfile = async (updates: Partial<RestaurantProfile>) => {
         const merged = {
             ...profile,

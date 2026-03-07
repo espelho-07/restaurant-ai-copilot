@@ -68,6 +68,11 @@ const RestaurantSetup = () => {
   const [orderFile, setOrderFile] = useState<File | null>(null);
   const [menuParseResult, setMenuParseResult] = useState<{ count: number; errors: string[] } | null>(null);
   const [orderParseResult, setOrderParseResult] = useState<{ count: number; errors: string[]; unmatched: string[] } | null>(null);
+  const [menuImportProgress, setMenuImportProgress] = useState(0);
+  const [orderImportProgress, setOrderImportProgress] = useState(0);
+  const [menuImporting, setMenuImporting] = useState(false);
+  const [orderImporting, setOrderImporting] = useState(false);
+  const isImporting = menuImporting || orderImporting;
 
   const [form, setForm] = useState({
     name: profile.name || "",
@@ -176,6 +181,8 @@ const RestaurantSetup = () => {
   };
 
   const handleMenuUpload = useCallback(async (file: File) => {
+    if (isImporting) return;
+
     const validExts = [".csv", ".xlsx", ".xls"];
     const ext = file.name.substring(file.name.lastIndexOf(".")).toLowerCase();
     if (!validExts.includes(ext)) {
@@ -183,8 +190,11 @@ const RestaurantSetup = () => {
       return;
     }
     try {
+      setMenuImporting(true);
+      setMenuImportProgress(5);
       setMenuFile(file);
       const result = await parseMenuCSV(file);
+      setMenuImportProgress(25);
 
       if (result.items.length === 0) {
         setMenuParseResult({ count: 0, errors: result.errors.length > 0 ? result.errors : ["No valid menu items found. Make sure your file has columns: Item Name, Selling Price, Food Cost, Category."] });
@@ -192,7 +202,10 @@ const RestaurantSetup = () => {
         return;
       }
 
-      const { added, duplicates } = await importMenuItems(result.items);
+      const { added, duplicates } = await importMenuItems(result.items, (percent) => {
+        setMenuImportProgress(Math.max(25, percent));
+      });
+      setMenuImportProgress(100);
       setMenuParseResult({
         count: added,
         errors: [
@@ -206,10 +219,15 @@ const RestaurantSetup = () => {
     } catch (err: any) {
       toast.error("Failed to read file", { description: err?.message || "The file might be corrupted or in an unsupported format. Try re-saving as CSV." });
       setMenuFile(null);
+      setMenuImportProgress(0);
+    } finally {
+      setMenuImporting(false);
     }
-  }, [importMenuItems]);
+  }, [importMenuItems, isImporting]);
 
   const handleOrderUpload = useCallback(async (file: File) => {
+    if (isImporting) return;
+
     const validExts = [".csv", ".xlsx", ".xls"];
     const ext = file.name.substring(file.name.lastIndexOf(".")).toLowerCase();
     if (!validExts.includes(ext)) {
@@ -221,8 +239,11 @@ const RestaurantSetup = () => {
       return;
     }
     try {
+      setOrderImporting(true);
+      setOrderImportProgress(5);
       setOrderFile(file);
       const result = await parseOrderCSV(file, menuItems);
+      setOrderImportProgress(25);
 
       if (result.orders.length === 0) {
         setOrderParseResult({
@@ -234,7 +255,10 @@ const RestaurantSetup = () => {
         return;
       }
 
-      const count = await importOrders(result.orders);
+      const count = await importOrders(result.orders, (percent) => {
+        setOrderImportProgress(Math.max(25, percent));
+      });
+      setOrderImportProgress(100);
       setOrderParseResult({
         count,
         errors: result.errors,
@@ -246,24 +270,28 @@ const RestaurantSetup = () => {
     } catch (err: any) {
       toast.error("Failed to read file", { description: err?.message || "The file might be corrupted. Try re-saving as CSV." });
       setOrderFile(null);
+      setOrderImportProgress(0);
+    } finally {
+      setOrderImporting(false);
     }
-  }, [menuItems, importOrders]);
+  }, [menuItems, importOrders, isImporting]);
 
   const handleFileDrop = useCallback((e: React.DragEvent, type: "menu" | "order") => {
     e.preventDefault();
+    if (isImporting) return;
     const file = e.dataTransfer.files[0];
     if (!file) return;
     if (type === "menu") handleMenuUpload(file);
     else handleOrderUpload(file);
-  }, [handleMenuUpload, handleOrderUpload]);
+  }, [handleMenuUpload, handleOrderUpload, isImporting]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>, type: "menu" | "order") => {
+    if (isImporting) return;
     const file = e.target.files?.[0];
     if (!file) return;
     if (type === "menu") handleMenuUpload(file);
     else handleOrderUpload(file);
-  }, [handleMenuUpload, handleOrderUpload]);
-
+  }, [handleMenuUpload, handleOrderUpload, isImporting]);
   // ─── STEP 3 SYNC ANIMATION ─────────────────────────────────────
 
   const startSync = () => {
@@ -645,24 +673,40 @@ const RestaurantSetup = () => {
                     <div
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={(e) => handleFileDrop(e, "menu")}
-                      className="relative flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-4 transition-colors hover:border-primary/40"
+                      className={`relative flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-4 transition-colors ${isImporting ? "cursor-not-allowed opacity-60" : "hover:border-primary/40"}` }
                     >
                       <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
                       <p className="mt-1 text-[11px] font-medium text-center">{menuFile ? menuFile.name : "Menu Data"}</p>
-                      <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "menu")} className="absolute inset-0 cursor-pointer opacity-0" />
+                      <input disabled={isImporting} type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "menu")} className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed" />
                     </div>
                     <div
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={(e) => handleFileDrop(e, "order")}
-                      className="relative flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-4 transition-colors hover:border-primary/40"
+                      className={`relative flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-4 transition-colors ${isImporting ? "cursor-not-allowed opacity-60" : "hover:border-primary/40"}` }
                     >
                       <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
                       <p className="mt-1 text-[11px] font-medium text-center">{orderFile ? orderFile.name : "Order Data"}</p>
-                      <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "order")} className="absolute inset-0 cursor-pointer opacity-0" />
+                      <input disabled={isImporting} type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "order")} className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed" />
                     </div>
                   </div>
-                  {menuParseResult && menuParseResult.count > 0 && <p className="mt-2 text-xs text-success">✓ {menuParseResult.count} menu items extracted</p>}
-                  {orderParseResult && orderParseResult.count > 0 && <p className="mt-1 text-xs text-success">✓ {orderParseResult.count} orders extracted</p>}
+                  {menuImporting && (
+                    <div className="mt-2">
+                      <p className="text-xs text-muted-foreground">Menu import in progress: {menuImportProgress}%</p>
+                      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                        <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${menuImportProgress}%` }} />
+                      </div>
+                    </div>
+                  )}
+                  {orderImporting && (
+                    <div className="mt-2">
+                      <p className="text-xs text-muted-foreground">Order import in progress: {orderImportProgress}%</p>
+                      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                        <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${orderImportProgress}%` }} />
+                      </div>
+                    </div>
+                  )}
+                  {menuParseResult && menuParseResult.count > 0 && <p className="mt-2 text-xs text-success">{menuParseResult.count} menu items extracted</p>}
+                  {orderParseResult && orderParseResult.count > 0 && <p className="mt-1 text-xs text-success">{orderParseResult.count} orders extracted</p>}
                 </div>
               </motion.div>
             )}
@@ -816,24 +860,40 @@ const RestaurantSetup = () => {
                     <div
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={(e) => handleFileDrop(e, "menu")}
-                      className="relative flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-4 transition-colors hover:border-primary/40"
+                      className={`relative flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-4 transition-colors ${isImporting ? "cursor-not-allowed opacity-60" : "hover:border-primary/40"}` }
                     >
                       <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
                       <p className="mt-1 text-[11px] font-medium text-center">{menuFile ? menuFile.name : "Menu Data"}</p>
-                      <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "menu")} className="absolute inset-0 cursor-pointer opacity-0" />
+                      <input disabled={isImporting} type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "menu")} className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed" />
                     </div>
                     <div
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={(e) => handleFileDrop(e, "order")}
-                      className="relative flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-4 transition-colors hover:border-primary/40"
+                      className={`relative flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-secondary/20 p-4 transition-colors ${isImporting ? "cursor-not-allowed opacity-60" : "hover:border-primary/40"}` }
                     >
                       <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
                       <p className="mt-1 text-[11px] font-medium text-center">{orderFile ? orderFile.name : "Order Data"}</p>
-                      <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "order")} className="absolute inset-0 cursor-pointer opacity-0" />
+                      <input disabled={isImporting} type="file" accept=".csv,.xlsx,.xls" onChange={(e) => handleFileSelect(e, "order")} className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed" />
                     </div>
                   </div>
-                  {menuParseResult && menuParseResult.count > 0 && <p className="mt-2 text-xs text-success">✓ {menuParseResult.count} menu items extracted</p>}
-                  {orderParseResult && orderParseResult.count > 0 && <p className="mt-1 text-xs text-success">✓ {orderParseResult.count} orders extracted</p>}
+                  {menuImporting && (
+                    <div className="mt-2">
+                      <p className="text-xs text-muted-foreground">Menu import in progress: {menuImportProgress}%</p>
+                      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                        <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${menuImportProgress}%` }} />
+                      </div>
+                    </div>
+                  )}
+                  {orderImporting && (
+                    <div className="mt-2">
+                      <p className="text-xs text-muted-foreground">Order import in progress: {orderImportProgress}%</p>
+                      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                        <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${orderImportProgress}%` }} />
+                      </div>
+                    </div>
+                  )}
+                  {menuParseResult && menuParseResult.count > 0 && <p className="mt-2 text-xs text-success">{menuParseResult.count} menu items extracted</p>}
+                  {orderParseResult && orderParseResult.count > 0 && <p className="mt-1 text-xs text-success">{orderParseResult.count} orders extracted</p>}
                 </div>
               </motion.div>
             )}
@@ -841,29 +901,39 @@ const RestaurantSetup = () => {
             {/* Navigation */}
             {selectedPOS !== null && (
               <div className="flex gap-3">
-                <button onClick={() => setStep(1)} className="rounded-xl border border-border px-5 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary">Back</button>
-                <button onClick={() => {
-                  if (menuItems.length === 0) {
-                    toast.error("Add at least one menu item", { description: "You need menu items before the AI engine can analyze your data." });
-                    return;
-                  }
-                  // Save POS config if connected
-                  if (selectedPOS && selectedPOS !== "none" && posConnectionResult?.success) {
-                    updatePOSConfig({
-                      posType: selectedPOS as any,
-                      apiBaseUrl: posForm.apiBaseUrl,
-                      apiKey: posForm.apiKey,
-                      restaurantId: posForm.restaurantId,
-                      secretKey: posForm.secretKey,
-                      autoSync: posForm.autoSync,
-                      syncIntervalMinutes: posForm.syncInterval,
-                      connected: true,
-                      lastSyncAt: new Date().toISOString(),
-                    });
-                  }
-                  setStep(3);
-                }} className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:brightness-110">
-                  Activate AI Engine <ArrowRight className="h-4 w-4" />
+                <button
+                  disabled={isImporting}
+                  onClick={() => setStep(1)}
+                  className="rounded-xl border border-border px-5 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Back
+                </button>
+                <button
+                  disabled={isImporting}
+                  onClick={() => {
+                    if (menuItems.length === 0) {
+                      toast.error("Add at least one menu item", { description: "You need menu items before the AI engine can analyze your data." });
+                      return;
+                    }
+                    // Save POS config if connected
+                    if (selectedPOS && selectedPOS !== "none" && posConnectionResult?.success) {
+                      updatePOSConfig({
+                        posType: selectedPOS as any,
+                        apiBaseUrl: posForm.apiBaseUrl,
+                        apiKey: posForm.apiKey,
+                        restaurantId: posForm.restaurantId,
+                        secretKey: posForm.secretKey,
+                        autoSync: posForm.autoSync,
+                        syncIntervalMinutes: posForm.syncInterval,
+                        connected: true,
+                        lastSyncAt: new Date().toISOString(),
+                      });
+                    }
+                    setStep(3);
+                  }}
+                  className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isImporting ? "Import in progress..." : "Activate AI Engine"} <ArrowRight className="h-4 w-4" />
                 </button>
               </div>
             )}

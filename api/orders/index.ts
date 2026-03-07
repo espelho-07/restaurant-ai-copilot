@@ -7,7 +7,7 @@ interface OrderRow {
   item_name: string;
   quantity: number;
   channel: string;
-  timestamp: string;
+  timestamp?: string | null;
   delivery_address?: string | null;
   city?: string | null;
   pincode?: string | null;
@@ -19,8 +19,8 @@ interface OrderRow {
 
 interface MenuRow {
   item_name: string;
-  selling_price: number;
-  food_cost: number;
+  selling_price?: number;
+  food_cost?: number;
   id: number;
 }
 
@@ -53,6 +53,75 @@ async function insertOrderRowsWithFallback(rows: Record<string, unknown>[]): Pro
         delete (next as any)[missingColumn];
         return next;
       });
+      continue;
+    }
+
+    throw error;
+  }
+}
+
+async function fetchMenuRowsWithFallback(restaurantId: string): Promise<MenuRow[]> {
+  let selectColumns = ["id", "item_name", "selling_price", "food_cost"];
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("menu_items")
+      .select(selectColumns.join(","))
+      .eq("restaurant_id", restaurantId);
+
+    if (!error) return (data || []) as MenuRow[];
+
+    const missingColumn = extractMissingColumn(error.message || "");
+    if (missingColumn && selectColumns.includes(missingColumn)) {
+      selectColumns = selectColumns.filter((column) => column !== missingColumn);
+      continue;
+    }
+
+    throw error;
+  }
+}
+
+async function fetchOrderRowsWithFallback(restaurantId: string): Promise<OrderRow[]> {
+  let selectColumns = [
+    "order_id",
+    "order_number",
+    "item_name",
+    "quantity",
+    "channel",
+    "timestamp",
+    "delivery_address",
+    "city",
+    "pincode",
+    "food_total",
+    "delivery_charge",
+    "total_amount",
+    "pos_order_ref",
+  ];
+
+  let orderByTimestamp = true;
+
+  while (true) {
+    let query = supabase
+      .from("orders")
+      .select(selectColumns.join(","))
+      .eq("restaurant_id", restaurantId);
+
+    if (orderByTimestamp) {
+      query = query.order("timestamp", { ascending: false });
+    }
+
+    const { data, error } = await query;
+    if (!error) return (data || []) as OrderRow[];
+
+    const missingColumn = extractMissingColumn(error.message || "");
+    if (missingColumn === "timestamp") {
+      orderByTimestamp = false;
+      selectColumns = selectColumns.filter((column) => column !== "timestamp");
+      continue;
+    }
+
+    if (missingColumn && selectColumns.includes(missingColumn)) {
+      selectColumns = selectColumns.filter((column) => column !== missingColumn);
       continue;
     }
 
@@ -97,28 +166,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { restaurantId } = await getAuthContext(req);
 
     if (req.method === "GET") {
-      const [{ data: menuRows, error: menuError }, { data: orderRows, error: orderError }] = await Promise.all([
-        supabase
-          .from("menu_items")
-          .select("id,item_name,selling_price,food_cost")
-          .eq("restaurant_id", restaurantId),
-        supabase
-          .from("orders")
-          .select("order_id,order_number,item_name,quantity,channel,timestamp,delivery_address,city,pincode,food_total,delivery_charge,total_amount,pos_order_ref")
-          .eq("restaurant_id", restaurantId)
-          .order("timestamp", { ascending: false }),
-      ]);
+      let menuRows: MenuRow[] = [];
+      let orderRows: OrderRow[] = [];
 
-      if (menuError || orderError) {
-        const message = menuError?.message || orderError?.message || "Failed to load orders";
-        if (isSchemaMismatch(message)) return res.status(200).json([]);
+      try {
+        menuRows = await fetchMenuRowsWithFallback(restaurantId);
+      } catch (menuError: any) {
+        const message = String(menuError?.message || "Failed to load menu data");
+        if (!isSchemaMismatch(message)) {
+          return res.status(500).json({ error: message });
+        }
+        menuRows = [];
+      }
+
+      try {
+        orderRows = await fetchOrderRowsWithFallback(restaurantId);
+      } catch (orderError: any) {
+        const message = String(orderError?.message || "Failed to load orders");
+        if (isSchemaMismatch(message)) {
+          return res.status(200).json([]);
+        }
         return res.status(500).json({ error: message });
       }
 
-      const menuByName = new Map((menuRows || []).map((row: any) => [String(row.item_name).toLowerCase(), row as MenuRow]));
+      const menuByName = new Map(menuRows.map((row) => [String(row.item_name || "").toLowerCase(), row]));
       const grouped = new Map<string, OrderRow[]>();
 
-      for (const row of (orderRows || []) as OrderRow[]) {
+      for (const row of orderRows) {
         const key = String(row.order_id || "");
         if (!key) continue;
         if (!grouped.has(key)) grouped.set(key, []);
@@ -130,8 +204,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const menu = menuByName.get(String(row.item_name || "").toLowerCase());
           return {
             menuItemId: Number(menu?.id || 0),
-            name: String(row.item_name),
-            qty: parseNumber(row.quantity, 1),
+            name: String(row.item_name || ""),
+            qty: Math.max(1, parseNumber(row.quantity, 1)),
             price: parseNumber(menu?.selling_price, 0),
             cost: parseNumber(menu?.food_cost, 0),
           };
@@ -152,7 +226,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           totalCost,
           margin,
           timestamp: rows[0]?.timestamp || new Date().toISOString(),
-          channel: (rows[0]?.channel || "OFFLINE").toUpperCase(),
+          channel: String(rows[0]?.channel || "OFFLINE").toUpperCase(),
           deliveryAddress: rows[0]?.delivery_address || "",
           city: rows[0]?.city || "",
           pincode: rows[0]?.pincode || "",
