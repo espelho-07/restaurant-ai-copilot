@@ -32,6 +32,25 @@ function normalizeEmail(value: unknown): string {
   return String(value || "").trim().toLowerCase();
 }
 
+function mapCallRows(rows: CallLogRow[]) {
+  return rows.map((row) => ({
+    callSid: row.call_sid,
+    status: row.status,
+    orderId: row.order_id,
+    total: parseNumber(row.total, 0),
+    timestamp: row.started_at || row.updated_at,
+    transcript: Array.isArray(row.transcript) ? row.transcript : [],
+    restaurantName: String(row.detected_items?.restaurant_name || ""),
+    selectedCity: String(row.detected_items?.selected_city || ""),
+    deliveryAddress: String(row.detected_items?.delivery_address || ""),
+    pincode: String(row.detected_items?.delivery_pincode || ""),
+    orderNumber: parseNumber(row.detected_items?.order_number, 0) || null,
+    deliveryCharge: parseNumber(row.detected_items?.delivery_charge, 0),
+    foodTotal: parseNumber(row.detected_items?.food_total, 0),
+    posOrderRef: String(row.detected_items?.pos_order_ref || ""),
+  }));
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -70,52 +89,75 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({ calls: [] });
   }
 
-  // In single-restaurant demo mode always query the configured restaurant.
-  // This avoids empty call dashboard when auth context points to an older row.
   const targetRestaurantId = fixedRestaurantId || restaurantId;
+  const candidateRestaurantIds = Array.from(new Set([targetRestaurantId, restaurantId].filter(Boolean)));
 
   try {
-    const { data: callRows } = await supabase
+    let query: any = supabase
       .from("call_logs")
       .select("call_sid,status,order_id,total,started_at,updated_at,transcript,detected_items")
-      .eq("restaurant_id", targetRestaurantId)
       .order("started_at", { ascending: false })
       .limit(20);
 
-    if (callRows && callRows.length > 0) {
-      const calls = (callRows as CallLogRow[]).map((row) => ({
-        callSid: row.call_sid,
-        status: row.status,
-        orderId: row.order_id,
-        total: parseNumber(row.total, 0),
-        timestamp: row.started_at || row.updated_at,
-        transcript: Array.isArray(row.transcript) ? row.transcript : [],
-        restaurantName: String(row.detected_items?.restaurant_name || ""),
-        selectedCity: String(row.detected_items?.selected_city || ""),
-        deliveryAddress: String(row.detected_items?.delivery_address || ""),
-        pincode: String(row.detected_items?.delivery_pincode || ""),
-        orderNumber: parseNumber(row.detected_items?.order_number, 0) || null,
-        deliveryCharge: parseNumber(row.detected_items?.delivery_charge, 0),
-        foodTotal: parseNumber(row.detected_items?.food_total, 0),
-        posOrderRef: String(row.detected_items?.pos_order_ref || ""),
-      }));
+    if (candidateRestaurantIds.length === 1) {
+      query = query.eq("restaurant_id", candidateRestaurantIds[0]);
+    } else if (candidateRestaurantIds.length > 1) {
+      query = query.in("restaurant_id", candidateRestaurantIds);
+    }
 
-      return res.status(200).json({ calls });
+    const { data } = await query;
+    let callRows = (data || []) as CallLogRow[];
+
+    // Owner-only fallback when configured restaurant mapping is stale.
+    if (callRows.length === 0) {
+      const { data: fallbackRows } = await supabase
+        .from("call_logs")
+        .select("call_sid,status,order_id,total,started_at,updated_at,transcript,detected_items")
+        .order("started_at", { ascending: false })
+        .limit(20);
+      callRows = (fallbackRows || []) as CallLogRow[];
+    }
+
+    if (callRows.length > 0) {
+      return res.status(200).json({ calls: mapCallRows(callRows) });
     }
   } catch {
     // If call_logs table is unavailable, fallback to CALL channel orders.
   }
 
-  const { data: orderRows } = await supabase
-    .from("orders")
-    .select("order_id,item_name,quantity,timestamp,channel,total_amount,delivery_charge,food_total,city,pincode,delivery_address,order_number")
-    .eq("restaurant_id", targetRestaurantId)
-    .eq("channel", "CALL")
-    .order("timestamp", { ascending: false })
-    .limit(200);
+  let orderRows: OrderRow[] = [];
+  try {
+    let orderQuery: any = supabase
+      .from("orders")
+      .select("order_id,item_name,quantity,timestamp,channel,total_amount,delivery_charge,food_total,city,pincode,delivery_address,order_number")
+      .eq("channel", "CALL")
+      .order("timestamp", { ascending: false })
+      .limit(200);
+
+    if (candidateRestaurantIds.length === 1) {
+      orderQuery = orderQuery.eq("restaurant_id", candidateRestaurantIds[0]);
+    } else if (candidateRestaurantIds.length > 1) {
+      orderQuery = orderQuery.in("restaurant_id", candidateRestaurantIds);
+    }
+
+    const { data } = await orderQuery;
+    orderRows = (data || []) as OrderRow[];
+
+    if (orderRows.length === 0) {
+      const { data: fallbackOrders } = await supabase
+        .from("orders")
+        .select("order_id,item_name,quantity,timestamp,channel,total_amount,delivery_charge,food_total,city,pincode,delivery_address,order_number")
+        .eq("channel", "CALL")
+        .order("timestamp", { ascending: false })
+        .limit(200);
+      orderRows = (fallbackOrders || []) as OrderRow[];
+    }
+  } catch {
+    orderRows = [];
+  }
 
   const grouped = new Map<string, OrderRow[]>();
-  for (const row of (orderRows || []) as OrderRow[]) {
+  for (const row of orderRows) {
     const key = String(row.order_id || "");
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key)!.push(row);
