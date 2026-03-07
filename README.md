@@ -2,6 +2,10 @@
 
 **AI-powered restaurant intelligence platform** that combines revenue optimization, voice-based order taking, and POS-ready order management. Built for restaurant owners to maximize profitability through data-driven insights and automated ordering systems.
 
+## Live Demo
+
+- [restaurant-ai-copilot.vercel.app](https://restaurant-ai-copilot.vercel.app/)
+
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/your-repo/restaurant-ai-copilot)
 
 ## ✨ Core Features
