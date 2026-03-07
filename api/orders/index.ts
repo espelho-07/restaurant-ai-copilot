@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getAuthContext, parseNumber, supabase } from "../_lib/auth.js";
 
 interface OrderRow {
+  id?: number | null;
   order_id: string;
   order_number?: number | null;
   item_name: string;
@@ -39,6 +40,72 @@ function extractMissingColumn(errorMessage: string): string | null {
   return null;
 }
 
+function parseOptionalNumber(value: unknown): number | null {
+  if (value === undefined || value === null || String(value).trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toObjectArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord);
+}
+
+function normalizeMenuRows(value: unknown): MenuRow[] {
+  return toObjectArray(value)
+    .map((row) => ({
+      id: parseNumber(row.id, 0),
+      item_name: String(row.item_name || "").trim(),
+      selling_price: parseOptionalNumber(row.selling_price) ?? undefined,
+      food_cost: parseOptionalNumber(row.food_cost) ?? undefined,
+    }))
+    .filter((row) => row.item_name.length > 0);
+}
+
+function normalizeOrderRows(value: unknown): OrderRow[] {
+  return toObjectArray(value)
+    .map((row) => ({
+      id: parseOptionalNumber(row.id),
+      order_id: String(row.order_id || ""),
+      order_number: parseOptionalNumber(row.order_number),
+      item_name: String(row.item_name || "").trim(),
+      quantity: Math.max(1, parseNumber(row.quantity, 1)),
+      channel: String(row.channel || "OFFLINE"),
+      timestamp: row.timestamp ? String(row.timestamp) : null,
+      delivery_address: row.delivery_address ? String(row.delivery_address) : null,
+      city: row.city ? String(row.city) : null,
+      pincode: row.pincode ? String(row.pincode) : null,
+      food_total: parseOptionalNumber(row.food_total),
+      delivery_charge: parseOptionalNumber(row.delivery_charge),
+      total_amount: parseOptionalNumber(row.total_amount),
+      pos_order_ref: row.pos_order_ref ? String(row.pos_order_ref) : null,
+    }))
+    .filter((row) => row.item_name.length > 0);
+}
+
+function resolveOrderKey(row: OrderRow, index: number): string {
+  const orderId = String(row.order_id || "").trim();
+  if (orderId) return orderId;
+
+  const orderNumber = parseNumber(row.order_number, 0);
+  if (orderNumber > 0) return `#${orderNumber}`;
+
+  const posRef = String(row.pos_order_ref || "").trim();
+  if (posRef) return `POS-${posRef}`;
+
+  const rowId = parseNumber(row.id, 0);
+  if (rowId > 0) return `ROW-${rowId}`;
+
+  const timestamp = String(row.timestamp || "").trim();
+  if (timestamp) return `${timestamp}-${String(row.channel || "OFFLINE").toUpperCase()}`;
+
+  return `UNKEYED-${index}`;
+}
+
 async function insertOrderRowsWithFallback(rows: Record<string, unknown>[]): Promise<void> {
   let mutableRows = rows.map((row) => ({ ...row }));
 
@@ -50,7 +117,7 @@ async function insertOrderRowsWithFallback(rows: Record<string, unknown>[]): Pro
     if (missingColumn && Object.prototype.hasOwnProperty.call(mutableRows[0] || {}, missingColumn)) {
       mutableRows = mutableRows.map((row) => {
         const next = { ...row };
-        delete (next as any)[missingColumn];
+        delete (next as Record<string, unknown>)[missingColumn];
         return next;
       });
       continue;
@@ -69,7 +136,7 @@ async function fetchMenuRowsWithFallback(restaurantId: string): Promise<MenuRow[
       .select(selectColumns.join(","))
       .eq("restaurant_id", restaurantId);
 
-    if (!error) return (data || []) as MenuRow[];
+    if (!error) return normalizeMenuRows(data);
 
     const missingColumn = extractMissingColumn(error.message || "");
     if (missingColumn && selectColumns.includes(missingColumn)) {
@@ -83,6 +150,7 @@ async function fetchMenuRowsWithFallback(restaurantId: string): Promise<MenuRow[
 
 async function fetchOrderRowsWithFallback(restaurantId: string): Promise<OrderRow[]> {
   let selectColumns = [
+    "id",
     "order_id",
     "order_number",
     "item_name",
@@ -111,7 +179,7 @@ async function fetchOrderRowsWithFallback(restaurantId: string): Promise<OrderRo
     }
 
     const { data, error } = await query;
-    if (!error) return (data || []) as OrderRow[];
+    if (!error) return normalizeOrderRows(data);
 
     const missingColumn = extractMissingColumn(error.message || "");
     if (missingColumn === "timestamp") {
@@ -192,11 +260,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const menuByName = new Map(menuRows.map((row) => [String(row.item_name || "").toLowerCase(), row]));
       const grouped = new Map<string, OrderRow[]>();
 
-      for (const row of orderRows) {
-        const key = String(row.order_id || "");
-        if (!key) continue;
+      for (let i = 0; i < orderRows.length; i++) {
+        const row = orderRows[i];
+        const key = resolveOrderKey(row, i);
         if (!grouped.has(key)) grouped.set(key, []);
-        grouped.get(key)!.push(row);
+        grouped.get(key)?.push(row);
       }
 
       const orders = Array.from(grouped.entries()).map(([orderId, rows]) => {
@@ -314,4 +382,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Unexpected server error" });
   }
 }
-

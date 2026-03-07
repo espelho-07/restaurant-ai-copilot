@@ -219,46 +219,81 @@ export async function resolveRestaurantForSession(session: CallSession): Promise
   if (!hasBackendSupabaseEnv) return false;
   if (session.restaurantId) return true;
 
-  const explicitRestaurant = String(process.env.RESTAURANT_ID || "").trim();
-  if (explicitRestaurant) {
-    const { data } = await supabase
-      .from("restaurants")
-      .select("id,name,city,area")
-      .eq("id", explicitRestaurant)
-      .limit(1)
-      .maybeSingle();
+  const assignSessionRestaurant = (source: any) => {
+    session.restaurantId = String(source?.id || "").trim();
+    if (!session.restaurantId) return false;
+    session.selectedRestaurantName = String(source?.name || process.env.RESTAURANT_NAME || "Darpan's Restro");
+    session.selectedCity = String(source?.city || "") || null;
+    session.selectedArea = String(source?.area || "") || null;
+    return true;
+  };
 
-    if (data?.id) {
-      session.restaurantId = String(data.id);
-      session.selectedRestaurantName = String((data as any).name || "Restaurant");
-      session.selectedCity = String((data as any).city || "") || null;
-      session.selectedArea = String((data as any).area || "") || null;
-      return true;
+  const explicitRestaurant = String(process.env.RESTAURANT_ID || "").trim();
+  const explicitLooksUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(explicitRestaurant);
+
+  if (explicitRestaurant) {
+    try {
+      const { data } = await supabase
+        .from("restaurants")
+        .select("id,name,city,area")
+        .eq("id", explicitRestaurant)
+        .limit(1)
+        .maybeSingle();
+
+      if (data?.id && assignSessionRestaurant(data)) {
+        return true;
+      }
+    } catch {
+      // Continue with other fallbacks.
     }
   }
 
-  const normalizedTo = normalizePhone(session.toPhone || "");
-  const { data: rows } = await supabase
-    .from("restaurants")
-    .select("id,name,city,area,phone,created_at")
-    .limit(500);
+  try {
+    const normalizedTo = normalizePhone(session.toPhone || "");
+    const { data: rows } = await supabase
+      .from("restaurants")
+      .select("id,name,city,area,phone,created_at")
+      .limit(500);
 
-  const restaurantRows = (rows || []) as any[];
-  const matchedByPhone = restaurantRows.find((row) => {
-    const dbPhone = normalizePhone(String(row?.phone || ""));
-    if (!dbPhone || !normalizedTo) return false;
-    return dbPhone === normalizedTo || dbPhone.endsWith(normalizedTo) || normalizedTo.endsWith(dbPhone);
-  });
+    const restaurantRows = (rows || []) as any[];
+    const matchedByPhone = restaurantRows.find((row) => {
+      const dbPhone = normalizePhone(String(row?.phone || ""));
+      if (!dbPhone || !normalizedTo) return false;
+      return dbPhone === normalizedTo || dbPhone.endsWith(normalizedTo) || normalizedTo.endsWith(dbPhone);
+    });
 
-  const selected = matchedByPhone || restaurantRows.sort((a, b) => String(a?.created_at || "").localeCompare(String(b?.created_at || "")))[0];
-  if (!selected?.id) return false;
+    const selected =
+      matchedByPhone ||
+      restaurantRows.sort((a, b) => String(a?.created_at || "").localeCompare(String(b?.created_at || "")))[0];
 
-  session.restaurantId = String(selected.id);
-  session.selectedRestaurantName = String(selected.name || "Restaurant");
-  session.selectedCity = String(selected.city || "") || null;
-  session.selectedArea = String(selected.area || "") || null;
-  return true;
+    if (selected?.id && assignSessionRestaurant(selected)) {
+      return true;
+    }
+  } catch {
+    // Continue with fallback queries.
+  }
+
+  try {
+    const { data: menuRows } = await supabase
+      .from("menu_items")
+      .select("restaurant_id")
+      .limit(1);
+
+    const fallbackRestaurantId = String((menuRows as any)?.[0]?.restaurant_id || "").trim();
+    if (fallbackRestaurantId && assignSessionRestaurant({ id: fallbackRestaurantId })) {
+      return true;
+    }
+  } catch {
+    // No menu fallback available.
+  }
+
+  if (explicitRestaurant && explicitLooksUuid && assignSessionRestaurant({ id: explicitRestaurant })) {
+    return true;
+  }
+
+  return false;
 }
+
 export async function fetchMenuAndOrders(restaurantId: string): Promise<{ menuItems: MenuItem[]; orders: Order[] }> {
   if (!hasBackendSupabaseEnv) return { menuItems: [], orders: [] };
 
@@ -801,3 +836,4 @@ export async function processSpeechTurn(params: {
   gatherPrompt(response, aiPrompt || "Please continue with your order.", baseUrl, session.language);
   return { twiml: response.toString() };
 }
+
