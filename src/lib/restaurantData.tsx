@@ -323,10 +323,12 @@ export function RestaurantDataProvider({ children }: { children: React.ReactNode
     const addOrder = async (items: OrderItem[], channel: SalesChannel = "OFFLINE") => {
         if (!Array.isArray(items) || items.length === 0) return null;
 
-        const created = await requestJson<{ orderId: string }>("/api/orders", {
+        const created = await requestJson<{ orderId: string; orderNumber: number; insertedItems: number; timestamp: string; totalAmount: number }>("/api/orders", {
             method: "POST",
             body: JSON.stringify({ items, channel }),
         });
+
+        if (!created.orderId) return null;
 
         const refreshed = await requestJson<any[]>("/api/orders");
         const mappedOrders = (Array.isArray(refreshed) ? refreshed : []).map(mapOrder);

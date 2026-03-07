@@ -110,20 +110,36 @@ create table if not exists public.orders (
   id bigserial primary key,
   restaurant_id uuid not null references public.restaurants(id) on delete cascade,
   order_id text not null,
+  order_number bigint,
   item_name text not null,
   quantity int not null default 1,
   channel text not null default 'OFFLINE',
   timestamp timestamptz not null default now(),
+  delivery_address text,
+  city text,
+  pincode text,
+  food_total numeric(12, 2),
+  delivery_charge numeric(12, 2),
+  total_amount numeric(12, 2),
+  pos_order_ref text,
   created_at timestamptz not null default now()
 );
 
 alter table public.orders add column if not exists id bigserial;
 alter table public.orders add column if not exists restaurant_id uuid;
 alter table public.orders add column if not exists order_id text;
+alter table public.orders add column if not exists order_number bigint;
 alter table public.orders add column if not exists item_name text;
 alter table public.orders add column if not exists quantity int not null default 1;
 alter table public.orders add column if not exists channel text not null default 'OFFLINE';
 alter table public.orders add column if not exists timestamp timestamptz not null default now();
+alter table public.orders add column if not exists delivery_address text;
+alter table public.orders add column if not exists city text;
+alter table public.orders add column if not exists pincode text;
+alter table public.orders add column if not exists food_total numeric(12, 2);
+alter table public.orders add column if not exists delivery_charge numeric(12, 2);
+alter table public.orders add column if not exists total_amount numeric(12, 2);
+alter table public.orders add column if not exists pos_order_ref text;
 alter table public.orders add column if not exists created_at timestamptz not null default now();
 
 -- CHANNELS ------------------------------------------------------------------
