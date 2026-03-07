@@ -289,7 +289,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const totalCost = items.reduce((sum, item) => sum + item.cost * item.qty, 0);
         const foodTotal = parseNumber(rows[0]?.food_total, itemTotal);
         const deliveryCharge = parseNumber(rows[0]?.delivery_charge, 0);
-        const total = parseNumber(rows[0]?.total_amount, foodTotal + deliveryCharge);
+        const storedTotal = parseNumber(rows[0]?.total_amount, 0);
+
+        // If stored total is 0 or null, calculate from items + delivery
+        const total = storedTotal > 0 ? storedTotal : foodTotal + deliveryCharge;
         const margin = total > 0 ? ((total - totalCost) / total) * 100 : 0;
 
         return {

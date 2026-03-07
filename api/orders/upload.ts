@@ -16,7 +16,24 @@ function extractMissingColumn(errorMessage: string): string | null {
   return null;
 }
 
-const REQUIRED_ORDER_COLUMNS = new Set(["restaurant_id", "item_name", "quantity"]);
+async function getNextOrderNumber(restaurantId: string): Promise<number> {
+  try {
+    const { data } = await supabase
+      .from("orders")
+      .select("order_number")
+      .eq("restaurant_id", restaurantId)
+      .order("order_number", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const latest = parseNumber((data as any)?.order_number, 0);
+    if (latest > 0) return latest + 1;
+  } catch {
+    // fallback
+  }
+
+  return 1;
+}
 
 async function insertOrderRowsWithFallback(rows: Record<string, unknown>[]) {
   let mutableRows = rows.map((row) => ({ ...row }));
@@ -55,8 +72,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const allowedChannels = new Set(["OFFLINE", "ZOMATO", "SWIGGY", "CALL", "OTHER"]);
 
-    const formatted = orders
-      .map((order: any) => {
+    // Group orders by order_id to assign sequential order numbers
+    const orderGroups = new Map<string, any[]>();
+    orders.forEach((order: any) => {
+      const orderId = String(order?.order_id || order?.id || "").trim();
+      if (!orderGroups.has(orderId)) orderGroups.set(orderId, []);
+      orderGroups.get(orderId)!.push(order);
+    });
+
+    let nextOrderNumber = await getNextOrderNumber(restaurantId);
+
+    const formatted = Array.from(orderGroups.entries()).flatMap(([orderId, orderItems]) => {
+      const hasOrderNumber = orderItems.some((item: any) => parseNumber(item?.order_number, 0) > 0);
+      const orderNumber = hasOrderNumber ? parseNumber(orderItems[0]?.order_number, 0) : nextOrderNumber++;
+
+      return orderItems.map((order: any) => {
         const qty = Math.max(1, parseNumber(order?.qty ?? order?.quantity, 1));
         const price = parseNumber(order?.price, 0);
         const foodTotal = parseNumber(order?.food_total, qty * price);
@@ -69,8 +99,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         return {
           restaurant_id: restaurantId,
-          order_id: String(order?.order_id || order?.id || `#${Date.now()}`).trim(),
-          order_number: parseNumber(order?.order_number, 0) || null,
+          order_id: orderId || `#${orderNumber}`,
+          order_number: orderNumber,
           item_name: String(order?.name || order?.item_name || "").trim().slice(0, 120),
           quantity: qty,
           channel: allowedChannels.has(normalizedChannel) ? normalizedChannel : "OFFLINE",
@@ -83,8 +113,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           total_amount: totalAmount,
           pos_order_ref: order?.pos_order_ref ? String(order.pos_order_ref) : null,
         };
-      })
-      .filter((row: any) => row.order_id.length > 0 && row.item_name.length > 0);
+      });
+    }).filter((row: any) => row.order_id.length > 0 && row.item_name.length > 0);
 
     if (formatted.length === 0) return res.status(400).json({ error: "No valid orders provided" });
 
