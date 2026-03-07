@@ -26,6 +26,12 @@ type OrderRow = {
   order_number?: number | string | null;
 };
 
+const DEFAULT_CALL_OWNER_EMAIL = "darpanparmar1707@gmail.com";
+
+function normalizeEmail(value: unknown): string {
+  return String(value || "").trim().toLowerCase();
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -40,6 +46,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(401).json({ error: error.message });
     }
     return res.status(500).json({ error: "Failed to resolve auth context" });
+  }
+
+  const ownerEmail = normalizeEmail(process.env.CALL_AGENT_OWNER_EMAIL || DEFAULT_CALL_OWNER_EMAIL);
+  const fixedRestaurantId = String(process.env.RESTAURANT_ID || "").trim();
+  const token = req.headers.authorization?.split(" ")[1] || "";
+
+  try {
+    if (!token) return res.status(200).json({ calls: [] });
+
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser(token);
+
+    if (error || !user) return res.status(200).json({ calls: [] });
+
+    const userEmail = normalizeEmail(user.email);
+    if (ownerEmail && userEmail !== ownerEmail) {
+      return res.status(200).json({ calls: [] });
+    }
+
+    if (fixedRestaurantId && restaurantId !== fixedRestaurantId) {
+      return res.status(200).json({ calls: [] });
+    }
+  } catch {
+    return res.status(200).json({ calls: [] });
   }
 
   try {

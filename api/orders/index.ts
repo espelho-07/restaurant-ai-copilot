@@ -106,6 +106,8 @@ function resolveOrderKey(row: OrderRow, index: number): string {
   return `UNKEYED-${index}`;
 }
 
+const REQUIRED_ORDER_COLUMNS = new Set(["restaurant_id", "item_name", "quantity"]);
+
 async function insertOrderRowsWithFallback(rows: Record<string, unknown>[]): Promise<void> {
   let mutableRows = rows.map((row) => ({ ...row }));
 
@@ -114,6 +116,10 @@ async function insertOrderRowsWithFallback(rows: Record<string, unknown>[]): Pro
     if (!error) return;
 
     const missingColumn = extractMissingColumn(error.message || "");
+    if (missingColumn && REQUIRED_ORDER_COLUMNS.has(missingColumn)) {
+      throw new Error(`Required orders column missing: ${missingColumn}`);
+    }
+
     if (missingColumn && Object.prototype.hasOwnProperty.call(mutableRows[0] || {}, missingColumn)) {
       mutableRows = mutableRows.map((row) => {
         const next = { ...row };
@@ -382,3 +388,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Unexpected server error" });
   }
 }
+

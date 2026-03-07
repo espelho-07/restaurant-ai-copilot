@@ -24,14 +24,15 @@ function isActivePath(currentPath: string, itemPath: string): boolean {
 
 export function DashboardNav() {
   const location = useLocation();
-  const { profile } = useRestaurantData();
+  const { profile, menuItems } = useRestaurantData();
   const { user, signOut } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const visibleNavItems = useMemo(() => navItems.filter((item) => {
-    if (item.path === "/setup" && profile.setupComplete) return false;
+    // Keep Setup accessible until menu data is actually available.
+    if (item.path === "/setup" && profile.setupComplete && menuItems.length > 0) return false;
     return true;
-  }), [profile.setupComplete]);
+  }), [menuItems.length, profile.setupComplete]);
 
   const badgeName = profile.name || user?.email?.split("@")[0] || "Guest";
 
@@ -152,3 +153,5 @@ export function DashboardNav() {
     </header>
   );
 }
+
+

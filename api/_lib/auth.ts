@@ -90,24 +90,113 @@ function pickPreferredRestaurant(rows: RestaurantIdentityRow[]): string | null {
   return scored[0]?.id || null;
 }
 
-async function findExistingRestaurantId(userId: string): Promise<string | null> {
-  const { data, error } = await supabase
-    .from("restaurants")
-    .select("id,setup_complete,updated_at,created_at,name")
-    .eq("user_id", userId)
-    .limit(100);
+async function fetchRestaurantRowsWithFallback(userId: string): Promise<RestaurantIdentityRow[]> {
+  let selectColumns = ["id", "setup_complete", "updated_at", "created_at", "name"];
 
-  if (error) {
-    if (hasMissingTable(error.message || "")) {
+  while (true) {
+    const { data, error } = await supabase
+      .from("restaurants")
+      .select(selectColumns.join(","))
+      .eq("user_id", userId)
+      .limit(100);
+
+    if (!error) return (data || []) as RestaurantIdentityRow[];
+
+    const message = error.message || "";
+    if (hasMissingTable(message)) {
       throw new Error("Database schema mismatch: restaurants table is missing. Run supabase_schema.sql.");
     }
-    return null;
+
+    const missingColumn = extractMissingColumn(message);
+    if (missingColumn && selectColumns.includes(missingColumn)) {
+      selectColumns = selectColumns.filter((column) => column !== missingColumn);
+      if (!selectColumns.includes("id")) {
+        selectColumns.unshift("id");
+      }
+      continue;
+    }
+
+    const { data: fallbackRows, error: fallbackError } = await supabase
+      .from("restaurants")
+      .select("id")
+      .eq("user_id", userId)
+      .limit(100);
+
+    if (!fallbackError) return (fallbackRows || []) as RestaurantIdentityRow[];
+
+    if (hasMissingTable(fallbackError.message || "")) {
+      throw new Error("Database schema mismatch: restaurants table is missing. Run supabase_schema.sql.");
+    }
+
+    throw new Error(fallbackError.message || message || "Failed to load restaurant profile");
+  }
+}
+
+async function chooseRestaurantByData(rows: RestaurantIdentityRow[]): Promise<string | null> {
+  const validRows = rows.filter((row) => row?.id);
+  if (validRows.length === 0) return null;
+  if (validRows.length === 1) return String(validRows[0].id);
+
+  const ids = validRows.map((row) => String(row.id));
+  const scoreById = new Map<string, number>();
+  for (const id of ids) scoreById.set(id, 0);
+
+  try {
+    const { data: menuRows } = await supabase
+      .from("menu_items")
+      .select("restaurant_id")
+      .in("restaurant_id", ids)
+      .limit(20000);
+
+    for (const row of (menuRows || []) as any[]) {
+      const id = String(row?.restaurant_id || "");
+      if (!scoreById.has(id)) continue;
+      scoreById.set(id, (scoreById.get(id) || 0) + 3);
+    }
+  } catch {
+    // ignore if menu table/column missing
   }
 
-  return pickPreferredRestaurant((data || []) as RestaurantIdentityRow[]);
+  try {
+    const { data: orderRows } = await supabase
+      .from("orders")
+      .select("restaurant_id")
+      .in("restaurant_id", ids)
+      .limit(20000);
+
+    for (const row of (orderRows || []) as any[]) {
+      const id = String(row?.restaurant_id || "");
+      if (!scoreById.has(id)) continue;
+      scoreById.set(id, (scoreById.get(id) || 0) + 1);
+    }
+  } catch {
+    // ignore if orders table/column missing
+  }
+
+  const fallbackPreference = pickPreferredRestaurant(validRows);
+
+  const byData = [...scoreById.entries()].sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    if (fallbackPreference && a[0] === fallbackPreference) return -1;
+    if (fallbackPreference && b[0] === fallbackPreference) return 1;
+    return a[0].localeCompare(b[0]);
+  });
+
+  const highestScore = byData[0]?.[1] || 0;
+  if (highestScore > 0) return byData[0][0];
+
+  return fallbackPreference || byData[0]?.[0] || null;
+}
+
+async function findExistingRestaurantId(userId: string): Promise<string | null> {
+  const rows = await fetchRestaurantRowsWithFallback(userId);
+  return chooseRestaurantByData(rows);
 }
 
 async function createRestaurantRow(userId: string): Promise<string> {
+  const existingId = await findExistingRestaurantId(userId);
+  if (existingId) return existingId;
+
   const payload: Record<string, unknown> = {
     user_id: userId,
     name: "",
@@ -137,8 +226,8 @@ async function createRestaurantRow(userId: string): Promise<string> {
     }
 
     if (isUniqueViolation(message)) {
-      const existingId = await findExistingRestaurantId(userId);
-      if (existingId) return existingId;
+      const existing = await findExistingRestaurantId(userId);
+      if (existing) return existing;
     }
 
     if (hasMissingTable(message)) {
