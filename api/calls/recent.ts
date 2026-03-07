@@ -48,8 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Failed to resolve auth context" });
   }
 
-  const ownerEmail = normalizeEmail(process.env.CALL_AGENT_OWNER_EMAIL || DEFAULT_CALL_OWNER_EMAIL);
-  const fixedRestaurantId = String(process.env.RESTAURANT_ID || "").trim();
+  // Email check disabled - using authenticated restaurantId instead
   const token = req.headers.authorization?.split(" ")[1] || "";
 
   try {
@@ -61,15 +60,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } = await supabase.auth.getUser(token);
 
     if (error || !user) return res.status(200).json({ calls: [] });
-
-    const userEmail = normalizeEmail(user.email);
-    if (ownerEmail && userEmail !== ownerEmail) {
-      return res.status(200).json({ calls: [] });
-    }
-
-    if (fixedRestaurantId && restaurantId !== fixedRestaurantId) {
-      return res.status(200).json({ calls: [] });
-    }
+    // restaurantId is already validated via getAuthContext()
   } catch {
     return res.status(200).json({ calls: [] });
   }
