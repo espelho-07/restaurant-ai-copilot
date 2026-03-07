@@ -45,6 +45,13 @@ function parseOptionalNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
+function normalizeItemKey(value: unknown): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -263,7 +270,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(500).json({ error: message });
       }
 
-      const menuByName = new Map(menuRows.map((row) => [String(row.item_name || "").toLowerCase(), row]));
+      const menuByName = new Map(menuRows.map((row) => [normalizeItemKey(row.item_name), row]));
       const grouped = new Map<string, OrderRow[]>();
 
       for (let i = 0; i < orderRows.length; i++) {
@@ -275,7 +282,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const orders = Array.from(grouped.entries()).map(([orderId, rows]) => {
         const items = rows.map((row) => {
-          const menu = menuByName.get(String(row.item_name || "").toLowerCase());
+          const menu = menuByName.get(normalizeItemKey(row.item_name));
           return {
             menuItemId: Number(menu?.id || 0),
             name: String(row.item_name || ""),
@@ -287,11 +294,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         const itemTotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
         const totalCost = items.reduce((sum, item) => sum + item.cost * item.qty, 0);
-        const foodTotal = parseNumber(rows[0]?.food_total, itemTotal);
-        const deliveryCharge = parseNumber(rows[0]?.delivery_charge, 0);
-        const storedTotal = parseNumber(rows[0]?.total_amount, 0);
+        const storedFoodTotal = rows.reduce((maxValue, row) => Math.max(maxValue, parseNumber(row?.food_total, 0)), 0);
+        const deliveryCharge = rows.reduce((maxValue, row) => Math.max(maxValue, parseNumber(row?.delivery_charge, 0)), 0);
+        const storedTotal = rows.reduce((maxValue, row) => Math.max(maxValue, parseNumber(row?.total_amount, 0)), 0);
 
-        // If stored total is 0 or null, calculate from items + delivery
+        const foodTotal = storedFoodTotal > 0 ? storedFoodTotal : itemTotal;
         const total = storedTotal > 0 ? storedTotal : foodTotal + deliveryCharge;
         const margin = total > 0 ? ((total - totalCost) / total) * 100 : 0;
 
@@ -391,4 +398,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Unexpected server error" });
   }
 }
+
 
