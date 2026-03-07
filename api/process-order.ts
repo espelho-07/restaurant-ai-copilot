@@ -213,7 +213,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const speechResult = String(body.SpeechResult || "").trim();
   const confidence = toNumber(body.Confidence, 1);
-  const effectiveSpeech = confidence < 0.25 ? "" : speechResult;
+  const effectiveSpeech = confidence < 0.08 && speechResult.length < 3 ? "" : speechResult;
 
   try {
     const turn = await processSpeechTurn({
@@ -256,3 +256,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).send(buildTransferResponse(session));
   }
 }
+

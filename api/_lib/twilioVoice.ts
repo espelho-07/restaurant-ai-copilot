@@ -120,12 +120,70 @@ function cleanForSpeech(text: string): string {
     .trim();
 }
 
+function tokenizeSpeech(text: string): string[] {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  const matrix: number[][] = Array.from({ length: b.length + 1 }, (_, i) => [i]);
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      matrix[i][j] = b[i - 1] === a[j - 1]
+        ? matrix[i - 1][j - 1]
+        : Math.min(
+            matrix[i - 1][j - 1] + 1,
+            matrix[i][j - 1] + 1,
+            matrix[i - 1][j] + 1,
+          );
+    }
+  }
+
+  return matrix[b.length][a.length];
+}
+
+function tokenApproximatelyMatches(token: string, keyword: string): boolean {
+  if (token === keyword) return true;
+  if (token.includes(keyword) || keyword.includes(token)) return true;
+  if (token.length >= 4 && keyword.length >= 4 && levenshteinDistance(token, keyword) <= 1) return true;
+  return false;
+}
+
+function hasApproxKeyword(text: string, keywords: string[]): boolean {
+  const tokens = tokenizeSpeech(text);
+  for (const token of tokens) {
+    for (const keyword of keywords) {
+      if (tokenApproximatelyMatches(token, keyword)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function isAffirmative(text: string): boolean {
-  return /\b(yes|yep|yeah|haan|ha|bilkul|sahi|confirm|place|ok|okay|theek|thik)\b/i.test(text);
+  if (/\b(yes|yep|yeah|haan|ha|bilkul|sahi|confirm|confirmed|place|ok|okay|theek|thik|done|final)\b/i.test(text)) {
+    return true;
+  }
+
+  return hasApproxKeyword(text, ["confirm", "confirmed", "confoirm", "conform", "place", "yes", "okay", "haan", "bilkul", "done"]);
 }
 
 function isNegative(text: string): boolean {
-  return /\b(no|nope|nahi|na|cancel|wrong|galat|mat)\b/i.test(text);
+  if (/\b(no|nope|nahi|na|cancel|wrong|galat|mat|stop)\b/i.test(text)) {
+    return true;
+  }
+
+  return hasApproxKeyword(text, ["no", "nahi", "cancel", "wrong", "galat", "stop"]);
 }
 
 function chooseLanguageFromSpeech(transcript: string): "en-IN" | "hi-IN" {
@@ -149,10 +207,11 @@ function gatherPrompt(response: InstanceType<typeof VoiceResponse>, prompt: stri
     method: "POST",
     action: `${baseUrl}/api/process-order`,
     actionOnEmptyResult: true,
-    timeout: 4,
+    timeout: 6,
     speechTimeout: "auto",
     speechModel: "phone_call",
     language,
+    hints: "confirm, yes, no, add, remove, veg burger, burger, coke, naan, butter naan, garlic naan",
   });
   gather.say({ language }, cleanForSpeech(prompt));
 }
@@ -164,6 +223,159 @@ function summarizeItems(items: OrderItem[]): string {
 
 function calculateFoodTotal(session: CallSession): number {
   return session.currentItems.reduce((sum, item) => sum + item.qty * item.price, 0);
+}
+
+function extractQuantityFromPhrase(phrase: string): number {
+  const normalized = String(phrase || "").toLowerCase();
+  const digitMatch = normalized.match(/\b(\d{1,2})\b/);
+  if (digitMatch?.[1]) {
+    const parsed = Number(digitMatch[1]);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+
+  const wordsToQty: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    ek: 1,
+    do: 2,
+    teen: 3,
+    char: 4,
+    chaar: 4,
+    paanch: 5,
+  };
+
+  for (const token of tokenizeSpeech(normalized)) {
+    const mapped = wordsToQty[token];
+    if (mapped) return mapped;
+  }
+
+  return 1;
+}
+
+function scoreMenuCandidate(phrase: string, candidate: string): number {
+  const source = normalizeLocation(phrase);
+  const target = normalizeLocation(candidate);
+  if (!source || !target) return 0;
+
+  if (source === target) return 1;
+  if (target.includes(source) || source.includes(target)) return 0.88;
+
+  const sourceTokens = tokenizeSpeech(source);
+  const targetTokens = tokenizeSpeech(target);
+
+  if (sourceTokens.length === 0 || targetTokens.length === 0) return 0;
+
+  let overlap = 0;
+  for (const token of sourceTokens) {
+    if (targetTokens.some((candidateToken) => tokenApproximatelyMatches(token, candidateToken))) {
+      overlap += 1;
+    }
+  }
+
+  const tokenScore = overlap / Math.max(sourceTokens.length, targetTokens.length);
+  const editScore = 1 - (levenshteinDistance(source, target) / Math.max(source.length, target.length));
+  const combined = (tokenScore * 0.75) + (Math.max(0, editScore) * 0.25);
+  return Math.max(0, Math.min(1, combined));
+}
+
+function getTopMenuAlternatives(phrase: string, menuItems: MenuItem[], limit = 2): { item: MenuItem; score: number }[] {
+  return menuItems
+    .map((item) => {
+      const aliasScores = (item.aliases || []).map((alias) => scoreMenuCandidate(phrase, alias));
+      const bestScore = Math.max(scoreMenuCandidate(phrase, item.name), ...aliasScores, 0);
+      return { item, score: bestScore };
+    })
+    .filter((entry) => entry.score >= 0.35)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, limit));
+}
+
+function buildCurrentOrderPrompt(session: CallSession): string {
+  if (session.currentItems.length === 0) {
+    return "Please tell me your order.";
+  }
+
+  const summary = summarizeItems(session.currentItems.map((item) => ({
+    menuItemId: item.menuItemId,
+    name: item.name,
+    qty: item.qty,
+    price: item.price,
+    cost: item.cost,
+  })));
+
+  const total = Math.round(calculateFoodTotal(session));
+  return `Current order is ${summary}. Food total is rupees ${total}. You can add more items or say confirm.`;
+}
+
+function buildAddedItemsPrompt(previousItems: VoiceOrderItem[], currentItems: VoiceOrderItem[]): string {
+  const previousQtyByItem = new Map<number, number>();
+  for (const item of previousItems) {
+    previousQtyByItem.set(item.menuItemId, (previousQtyByItem.get(item.menuItemId) || 0) + item.qty);
+  }
+
+  const addedParts: string[] = [];
+  for (const item of currentItems) {
+    const beforeQty = previousQtyByItem.get(item.menuItemId) || 0;
+    const addedQty = item.qty - beforeQty;
+    if (addedQty > 0) {
+      addedParts.push(`${addedQty} ${item.name}`);
+    }
+  }
+
+  if (addedParts.length === 0) return "";
+  return `I added ${addedParts.join(", ")}.`;
+}
+
+function applyUnmatchedAutoRematch(unmatched: string[], menuItems: MenuItem[], currentItems: VoiceOrderItem[]): string[] {
+  const rematched: string[] = [];
+
+  for (const phrase of unmatched) {
+    const best = getTopMenuAlternatives(phrase, menuItems, 1)[0];
+    if (!best || best.score < 0.82) continue;
+
+    const qty = Math.max(1, extractQuantityFromPhrase(phrase));
+    const existing = currentItems.find((item) => item.menuItemId === best.item.id);
+
+    if (existing) {
+      existing.qty += qty;
+    } else {
+      currentItems.push({
+        menuItemId: best.item.id,
+        name: best.item.name,
+        qty,
+        price: best.item.price,
+        cost: best.item.cost,
+        modifiers: [],
+        confidence: Math.min(1, best.score),
+      });
+    }
+
+    rematched.push(best.item.name);
+  }
+
+  return rematched;
+}
+
+function buildUnavailablePrompt(unmatched: string[], menuItems: MenuItem[]): string {
+  if (!unmatched.length) {
+    return "Sorry, that item is not available on our menu.";
+  }
+
+  const phrase = unmatched[0];
+  const alternatives = getTopMenuAlternatives(phrase, menuItems, 2);
+
+  if (alternatives.length >= 2) {
+    return `${phrase} is not available. We have ${alternatives[0].item.name} and ${alternatives[1].item.name}. Which one would you like?`;
+  }
+
+  if (alternatives.length === 1) {
+    return `${phrase} is not available. We have ${alternatives[0].item.name}. Would you like that?`;
+  }
+
+  return `${phrase} is not available on our menu. Please choose another item.`;
 }
 
 export async function findRestaurantsByLocation(locationInput: string): Promise<RestaurantCandidate[]> {
@@ -562,7 +774,7 @@ export async function persistCallLog(session: CallSession, extras?: {
 
 export function buildTransferResponse(session: CallSession): string {
   const response = new VoiceResponse();
-  const transferText = "I am transferring your call to our restaurant staff now.";
+  const transferText = fallbackPhone ? "I am transferring your call to our restaurant staff now. Please stay on the line." : "I am transferring your call to our restaurant staff now.";
   addMessage(session, "ai", transferText);
   response.say({ language: session.language }, transferText);
 
@@ -601,7 +813,10 @@ function buildRetryPrompt(session: CallSession): string {
     return "Please tell your full delivery address including area and six digit pincode.";
   }
   if (session.status === "awaiting_confirmation") {
-    return "Please say yes to place the order, or no to modify your order.";
+    return "Please say yes or confirm to place the order, or say no to modify your order.";
+  }
+  if (session.currentItems.length > 0) {
+    return "I could not hear that clearly. You can add more items, or say confirm to place the order.";
   }
   return "I could not hear that clearly. Please repeat your order slowly.";
 }
@@ -639,9 +854,23 @@ export async function processSpeechTurn(params: {
     }
   }
 
+  const { menuItems, orders } = await fetchMenuAndOrders(session.restaurantId || "");
+
+  if (session.status === "collecting_order" && session.currentItems.length > 0 && isAffirmative(transcript)) {
+    session.status = "awaiting_address";
+    session.upsellItemId = null;
+    session.pendingComboItemIds = [];
+    session.comboPrompted = true;
+    session.upsellPrompted = true;
+
+    const quickConfirm = "Okay, we are confirming your order. Please tell your delivery address including area and six digit pincode.";
+    addMessage(session, "ai", quickConfirm);
+    gatherPrompt(response, quickConfirm, baseUrl, session.language);
+    return { twiml: response.toString() };
+  }
+
   if (session.comboPrompted && session.pendingComboItemIds.length > 0) {
     if (isAffirmative(transcript)) {
-      const { menuItems } = await fetchMenuAndOrders(session.restaurantId || "");
       for (const comboItemId of session.pendingComboItemIds) {
         const comboItem = menuItems.find((m) => m.id === comboItemId);
         if (!comboItem) continue;
@@ -661,7 +890,7 @@ export async function processSpeechTurn(params: {
       }
 
       session.pendingComboItemIds = [];
-      const comboAdded = "Great, I added the combo items. Anything else?";
+      const comboAdded = `Great, I added the combo items. ${buildCurrentOrderPrompt(session)}`;
       addMessage(session, "ai", comboAdded);
       gatherPrompt(response, comboAdded, baseUrl, session.language);
       return { twiml: response.toString() };
@@ -677,7 +906,7 @@ export async function processSpeechTurn(params: {
   }
 
   if (session.status === "awaiting_address") {
-    if (transcript.length < 8) {
+    if (isAffirmative(transcript) || isNegative(transcript) || transcript.length < 8) {
       const askAgain = "Please share a complete delivery address with area and six digit pincode.";
       addMessage(session, "ai", askAgain);
       gatherPrompt(response, askAgain, baseUrl, session.language);
@@ -752,9 +981,12 @@ export async function processSpeechTurn(params: {
       gatherPrompt(response, editPrompt, baseUrl, session.language);
       return { twiml: response.toString() };
     }
-  }
 
-  const { menuItems, orders } = await fetchMenuAndOrders(session.restaurantId || "");
+    const retryConfirm = "Please say yes or confirm to place the order, or say no to modify the order.";
+    addMessage(session, "ai", retryConfirm);
+    gatherPrompt(response, retryConfirm, baseUrl, session.language);
+    return { twiml: response.toString() };
+  }
 
   if (session.upsellItemId && isAffirmative(transcript)) {
     const upsellItem = menuItems.find((item) => item.id === session.upsellItemId);
@@ -775,7 +1007,7 @@ export async function processSpeechTurn(params: {
       }
 
       session.upsellItemId = null;
-      const upsellAdded = `${upsellItem.name} added. Anything else?`;
+      const upsellAdded = `${upsellItem.name} added. ${buildCurrentOrderPrompt(session)}`;
       addMessage(session, "ai", upsellAdded);
       gatherPrompt(response, upsellAdded, baseUrl, session.language);
       return { twiml: response.toString() };
@@ -784,30 +1016,61 @@ export async function processSpeechTurn(params: {
     session.upsellItemId = null;
   }
 
+  const previousItems = session.currentItems.map((item) => ({ ...item, modifiers: [...item.modifiers] }));
   const result = processTranscript(transcript, menuItems, orders, session.currentItems, session.language);
   session.currentItems = result.items;
 
+  if (result.intent === "confirm_order" && session.currentItems.length > 0) {
+    session.status = "awaiting_address";
+    const addressPrompt = "Okay, we are confirming your order. Please tell your delivery address including area and pincode.";
+    addMessage(session, "ai", addressPrompt);
+    gatherPrompt(response, addressPrompt, baseUrl, session.language);
+    return { twiml: response.toString() };
+  }
+
+  if (result.clarifications.length > 0) {
+    const clarification = result.clarifications[0];
+    const options = clarification.candidates.slice(0, 2).map((item) => item.name);
+    const clarifyPrompt = options.length >= 2
+      ? `Are you trying to say ${options[0]} or ${options[1]}?`
+      : `Are you trying to say ${options[0]}?`;
+
+    addMessage(session, "ai", clarifyPrompt);
+    gatherPrompt(response, clarifyPrompt, baseUrl, session.language);
+    return { twiml: response.toString() };
+  }
+
   if (result.unmatched.length > 0) {
+    const rematched = applyUnmatchedAutoRematch(result.unmatched, menuItems, session.currentItems);
+    if (rematched.length > 0) {
+      session.failureCount = 0;
+      const rematchPrompt = `I think you meant ${rematched.join(" and ")}. ${buildCurrentOrderPrompt(session)}`;
+      addMessage(session, "ai", rematchPrompt);
+      gatherPrompt(response, rematchPrompt, baseUrl, session.language);
+      return { twiml: response.toString() };
+    }
+
     session.failureCount += 1;
-    const msg = "Sorry, that item is not available on our menu.";
-    addMessage(session, "ai", msg);
+    const unavailablePrompt = buildUnavailablePrompt(result.unmatched, menuItems);
+    addMessage(session, "ai", unavailablePrompt);
 
     if (session.failureCount >= 3) {
       session.status = "transferred";
       return { twiml: buildTransferResponse(session) };
     }
 
-    gatherPrompt(response, msg, baseUrl, session.language);
+    gatherPrompt(response, unavailablePrompt, baseUrl, session.language);
     return { twiml: response.toString() };
   }
 
   session.failureCount = 0;
+  const addedPrompt = buildAddedItemsPrompt(previousItems, session.currentItems);
 
   if (result.combos.length > 0 && !session.comboPrompted) {
     const combo = result.combos[0];
     session.comboPrompted = true;
     session.pendingComboItemIds = combo.items.map((item) => item.id);
-    const comboPrompt = `We have a combo with ${combo.items.map((item) => item.name).join(", ")} for rupees ${Math.round(combo.comboPrice)}. Would you like that combo?`;
+    const comboPrompt = `${addedPrompt ? `${addedPrompt} ` : ""}We have a combo with ${combo.items.map((item) => item.name).join(", ")} for rupees ${Math.round(combo.comboPrice)}. Would you like that combo?`;
     addMessage(session, "ai", comboPrompt);
     gatherPrompt(response, comboPrompt, baseUrl, session.language);
     return { twiml: response.toString() };
@@ -817,23 +1080,21 @@ export async function processSpeechTurn(params: {
     const upsell = result.upsells[0];
     session.upsellPrompted = true;
     session.upsellItemId = upsell.item.id;
-    const upsellPrompt = `Would you like ${upsell.item.name} with your order?`;
+    const upsellPrompt = `${addedPrompt ? `${addedPrompt} ` : ""}Would you like ${upsell.item.name} with your order?`;
     addMessage(session, "ai", upsellPrompt);
     gatherPrompt(response, upsellPrompt, baseUrl, session.language);
     return { twiml: response.toString() };
   }
 
-  if (result.intent === "confirm_order" && session.currentItems.length > 0) {
-    session.status = "awaiting_address";
-    const addressPrompt = "Please tell your delivery address including area and pincode.";
-    addMessage(session, "ai", addressPrompt);
-    gatherPrompt(response, addressPrompt, baseUrl, session.language);
+  if (addedPrompt) {
+    const addSummaryPrompt = `${addedPrompt} ${buildCurrentOrderPrompt(session)}`;
+    addMessage(session, "ai", addSummaryPrompt);
+    gatherPrompt(response, addSummaryPrompt, baseUrl, session.language);
     return { twiml: response.toString() };
   }
 
-  const aiPrompt = cleanForSpeech(result.aiResponse);
+  const aiPrompt = cleanForSpeech(result.aiResponse || buildCurrentOrderPrompt(session));
   addMessage(session, "ai", aiPrompt || "Please continue with your order.");
   gatherPrompt(response, aiPrompt || "Please continue with your order.", baseUrl, session.language);
   return { twiml: response.toString() };
 }
-
