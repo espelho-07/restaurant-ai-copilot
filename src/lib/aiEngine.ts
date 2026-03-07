@@ -227,7 +227,8 @@ export function generateComboRecommendations(
     menuItems: MenuItem[],
     orders: Order[]
 ): ComboRecommendation[] {
-    if (orders.length < 2) return generateSeedCombos(menuItems, orders.length);
+    const comboLimit = getDynamicComboLimit(menuItems.length, orders.length);
+    if (orders.length < 2) return generateSeedCombos(menuItems, orders.length, comboLimit);
     const coOccurrences = buildCoOccurrenceMatrix(orders);
     const totalOrders = orders.length;
     const sorted = coOccurrences.sort((a, b) => b.count - a.count);
@@ -236,7 +237,8 @@ export function generateComboRecommendations(
     // Deduplication: track combos by sorted item IDs so ABC == BAC == CBA
     const usedComboKeys = new Set<string>();
 
-    for (const pair of sorted.slice(0, 12)) {
+    const pairScanLimit = Math.max(12, comboLimit * 4);
+    for (const pair of sorted.slice(0, pairScanLimit)) {
         const key = `${pair.itemA}-${pair.itemB}`;
         if (usedPairs.has(key)) continue;
         usedPairs.add(key);
@@ -280,8 +282,9 @@ export function generateComboRecommendations(
             impactLevel, reasoning, impactedMetrics: ["Average Order Value", "Revenue", "Customer Satisfaction"],
             estimatedMonthlyImpact: Math.round(suggestedPrice * pair.count * 4.3 * 0.15),
         });
+        if (combos.length >= comboLimit) break;
     }
-    return combos.length > 0 ? combos.slice(0, 4) : generateSeedCombos(menuItems, totalOrders);
+    return combos.length > 0 ? combos.slice(0, comboLimit) : generateSeedCombos(menuItems, totalOrders, comboLimit);
 }
 
 function findThirdItem(idA: number, idB: number, coOccurrences: CoOccurrence[], menuItems: MenuItem[]): MenuItem | null {
@@ -297,7 +300,14 @@ function findThirdItem(idA: number, idB: number, coOccurrences: CoOccurrence[], 
     return bestId > 0 ? menuItems.find((m) => m.id === bestId) || null : null;
 }
 
-function generateSeedCombos(menuItems: MenuItem[], totalOrders: number): ComboRecommendation[] {
+function getDynamicComboLimit(menuItemCount: number, orderCount: number): number {
+    const menuDriven = Math.ceil(Math.max(menuItemCount, 0) / 3);
+    const orderDriven = Math.ceil(Math.max(orderCount, 0) / 20);
+    const computed = Math.max(4, menuDriven + orderDriven);
+    return Math.min(12, computed);
+}
+
+function generateSeedCombos(menuItems: MenuItem[], totalOrders: number, comboLimit: number): ComboRecommendation[] {
     const combos: ComboRecommendation[] = [];
 
     // Group items by broad types for logical pairing
@@ -339,7 +349,7 @@ function generateSeedCombos(menuItems: MenuItem[], totalOrders: number): ComboRe
             estimatedMonthlyImpact: Math.round(suggestedPrice * 0.12 * 30),
         });
 
-        if (combos.length >= 4) break;
+        if (combos.length >= comboLimit) break;
     }
 
     // Fallback if templates fail (e.g. very limited menu)
@@ -354,7 +364,7 @@ function generateSeedCombos(menuItems: MenuItem[], totalOrders: number): ComboRe
         });
     }
 
-    return combos.slice(0, 4);
+    return combos.slice(0, comboLimit);
 }
 
 // ─── DASHBOARD INSIGHTS (Channel-Aware) ───────────────────────────
